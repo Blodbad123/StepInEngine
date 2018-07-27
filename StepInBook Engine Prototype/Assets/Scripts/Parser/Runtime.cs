@@ -31,7 +31,7 @@ public class Runtime : MonoBehaviour
 
 
 	static string pathToParsedBooks;
-
+	/*
     public void Awake ()
     {
 		pathToParsedBooks = Application.dataPath + "/Books/";
@@ -67,6 +67,44 @@ public class Runtime : MonoBehaviour
 			}
 		}
     }
+
+*/
+
+	public static void Parse(string inputPath)
+	{
+		pathToParsedBooks = Application.dataPath + "/Books/";
+		//string pathToEpub = Application.dataPath + "/EpubBooks/bughuntersdiary.epub";
+		string pathToEpub = inputPath; 
+		//foreach (string file in paths.Where(n => n.ToLower().EndsWith(".epub")))
+		//{
+		if (pathToEpub.EndsWith(".epub", StringComparison.CurrentCulture))
+		{
+			//Debug.Log("This is an epub file...");
+
+			using (TemporaryFolder path = new TemporaryFolder())
+			{
+				//string path = Application.dataPath + "/Books/"; 
+				using (ZipFile epub = ZipFile.Read(pathToEpub))
+				{
+					epub.ExtractAll(path, ExtractExistingFileAction.OverwriteSilently);
+
+					if (File.Exists(path + "/META-INF/container.xml"))
+					{
+						var xmlDocument = new XmlDocument().From(path + "/META-INF/container.xml");
+						var xmlNamespaces = new XmlNamespaceManager(xmlDocument.NameTable).Assign(new Dictionary<string, string>()
+					{
+						{ "ns", "urn:oasis:names:tc:opendocument:xmlns:container" }
+					});
+						Extract(path, path + xmlDocument.SelectNodes("/ns:container/ns:rootfiles/ns:rootfile", xmlNamespaces)[0].Attributes["full-path"].InnerText);
+					}
+					else
+					{
+						Debug.Log("The file does not contain a 'container.xml' file...");
+					}
+				}
+			}
+		}
+	}
     
     /**
      *  @description
