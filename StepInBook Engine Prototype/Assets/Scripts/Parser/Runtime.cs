@@ -1,5 +1,6 @@
 
 using System;
+using UnityEditor; 
 using UnityEngine; 
 using System.Collections.Generic;
 using System.IO;
@@ -31,48 +32,19 @@ public class Runtime : MonoBehaviour
 
 
 	static string pathToParsedBooks;
-	/*
+	static List<Texture2D> images;
+	static string pathToThisTitle; 
     public void Awake ()
     {
 		pathToParsedBooks = Application.dataPath + "/Books/";
-		string pathToEpub = Application.dataPath + "/EpubBooks/bughuntersdiary.epub";
-
-		//foreach (string file in paths.Where(n => n.ToLower().EndsWith(".epub")))
-		//{
-		if (pathToEpub.EndsWith(".epub", StringComparison.CurrentCulture))
-		{
-			//Debug.Log("This is an epub file...");
-
-			using (TemporaryFolder path = new TemporaryFolder())
-			{
-				//string path = Application.dataPath + "/Books/"; 
-				using (ZipFile epub = ZipFile.Read(pathToEpub))
-				{
-					epub.ExtractAll(path, ExtractExistingFileAction.OverwriteSilently);
-
-					if (File.Exists(path + "/META-INF/container.xml"))
-					{
-						var xmlDocument = new XmlDocument().From(path + "/META-INF/container.xml");
-						var xmlNamespaces = new XmlNamespaceManager(xmlDocument.NameTable).Assign(new Dictionary<string, string>()
-					{
-						{ "ns", "urn:oasis:names:tc:opendocument:xmlns:container" }
-					});
-						Extract(path, path + xmlDocument.SelectNodes("/ns:container/ns:rootfiles/ns:rootfile", xmlNamespaces)[0].Attributes["full-path"].InnerText);
-					}
-					else
-					{
-						Debug.Log("The file does not contain a 'container.xml' file...");
-					}
-				}
-			}
-		}
+		Parse(Application.dataPath + "/EpubBooks/bughuntersdiary.epub"); 
     }
 
-*/
-
+	/* Use the editor tool to evoke the parsing */
 	public static void Parse(string inputPath)
 	{
 		pathToParsedBooks = Application.dataPath + "/Books/";
+		images = new List<Texture2D>(); 
 		//string pathToEpub = Application.dataPath + "/EpubBooks/bughuntersdiary.epub";
 		string pathToEpub = inputPath; 
 		//foreach (string file in paths.Where(n => n.ToLower().EndsWith(".epub")))
@@ -217,7 +189,6 @@ public class Runtime : MonoBehaviour
 		// At this point in time, you should do:
 		// Read each file at root + the path in data.spine and insert them as pages
 
-
 		string subPath = "";
 		string defaultName = "DefaultBook"; 
 		// Create folders and structure... 
@@ -231,14 +202,20 @@ public class Runtime : MonoBehaviour
 			subPath = pathToParsedBooks + defaultName; 
 		}
 
+		pathToThisTitle = subPath; 
+
 		// I need a better solution for this...
 		int folderCount = 0;
 		string strippedString;
 		foreach (string sp in data.spine){
+
 			int index = sp.IndexOf("/");
-			strippedString = sp; 
+			strippedString = sp;
 			if (index > 0)
-			strippedString = sp.Substring(index+1, sp.Length-index - 7);
+			{
+				strippedString = sp.Substring(index + 1, sp.Length - index - 7);
+			}
+
 			string folderName = folderCount + "_" + strippedString; 
 			CreateDirectory(folderName, subPath);
 			string path = subPath + "/" + folderName + "/";
@@ -250,11 +227,33 @@ public class Runtime : MonoBehaviour
 			folderCount++; 
 		}
 
+		ExtractImages(data.links, root);
+
 		Debug.Log("Paused..");
 
+		//AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate); 
     }
 	static void CreateDirectory(string name, string path){
 		
 		Directory.CreateDirectory(path + "/" + name + "/"); 
+	}
+
+	/* This function just places all images in the base folder.. We need to figure out how to sort them by spine elements... */
+	static byte[] imgData; 
+	static void ExtractImages(Dictionary<string, string> input, string root){
+		CreateDirectory("IMAGES", pathToThisTitle); 
+		int imageCount = 0;
+		foreach(var kvp in input){
+			Texture2D tex = new Texture2D(2, 2); 
+			if(kvp.Value.EndsWith(".png") || kvp.Value.EndsWith(".jpg")){
+				Debug.Log("This is an image"); 
+				imgData = File.ReadAllBytes(root + "/OEBPS/" + kvp.Value);
+				File.WriteAllBytes(pathToThisTitle +"/"+kvp.Value, imgData); 
+				tex.LoadImage(imgData);
+				images.Add(tex);
+			}
+		}
+
+		Debug.Log("There are " + images.Count + " images in this book"); 
 	}
 }

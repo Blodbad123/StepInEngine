@@ -1,11 +1,12 @@
 ﻿<Properties StartupConfiguration="{3B246EC8-7DC0-817A-9402-D639B3B0526A}|">
-  <MonoDevelop.Ide.Workbench ActiveDocument="Assets/Scripts/Parser/Runtime.cs">
+  <MonoDevelop.Ide.Workbench ActiveDocument="Assets/Editor/WindowMain.cs">
     <Files>
-      <File FileName="Assets/Scripts/Parser/Runtime.cs" Line="34" Column="3" />
+      <File FileName="Assets/Scripts/Parser/Runtime.cs" Line="249" Column="2" />
       <File FileName="Assets/Scripts/Parser/GameData.cs" Line="21" Column="1" />
       <File FileName="Assets/Editor/ChapterText.cs" Line="21" Column="19" />
       <File FileName="Assets/Scripts/Parser/Extensions.cs" Line="1" Column="1" />
-      <File FileName="Assets/Editor/ParseEpub.cs" Line="10" Column="1" />
+      <File FileName="Assets/Editor/ParseEpub.cs" Line="34" Column="3" />
+      <File FileName="Assets/Editor/WindowMain.cs" Line="1" Column="1" />
     </Files>
   </MonoDevelop.Ide.Workbench>
   <MonoDevelop.Ide.Workspace ActiveConfiguration="Debug" />
