@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>A.2 NULL Pointer Dereferences</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="A.2 NULL Pointer Dereferences"><div class="titlepage"><div><div><h1 class="title"><a id="a.2_null_pointer_dereferences"/>A.2 NULL Pointer Dereferences</h1></div></div></div><p>Memory is divided into pages. Typically, a process, a thread, or the kernel cannot read from or write to a memory location on the zero page. <a class="xref" href="apas02.html#using_unowned_memoryman_example" title="Example A-2. Using unowned memory—an example NULL pointer dereference">Example A-2</a> shows a simple example of what happens if the zero page gets referenced due to a programming error.<a id="IDX-APP-A-0047" class="indexterm"/></p><div class="example"><a id="using_unowned_memoryman_example"/><p class="title">Example A-2. Using unowned memory—an example NULL pointer dereference</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02
+03    typedef struct pkt {
+04        char *  value;
+05    } pkt_t;
+06
+07    int
+08    main (void)
+09    {
+10        pkt_t *  packet  = NULL;
+11
+12        printf ("%s", packet-&gt;value);
+13
+14        return 0;
+15    }</pre></div></div><p>In line 10 of <a class="xref" href="apas02.html#using_unowned_memoryman_example" title="Example A-2. Using unowned memory—an example NULL pointer dereference">Example A-2</a> the data structure <code class="literal">packet</code> is initialized with <code class="literal">NULL</code>, and in line 12 a structure member gets referenced. Since <code class="literal">packet</code> points to <code class="literal">NULL</code>, this reference can be represented as <code class="literal">NULL-&gt;value</code>. This leads to a classic <span class="emphasis"><em>NULL pointer dereference</em></span> when the program tries to read a value from memory page zero. If you compile this program under Microsoft Windows and start it in the Windows Debugger WinDbg (see Section B.2), you get the following result:<a id="IDX-APP-A-0048" class="indexterm"/></p><a id="I_programlisting_d1e10005"/><pre class="programlisting">[..]
+(1334.12dc): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+<strong class="userinput"><code>eax=00000000</code></strong> ebx=7713b68f ecx=00000001 edx=77c55e74 esi=00000002 edi=00001772
+eip=0040100e esp=0012ff34 ebp=0012ff38 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+*** WARNING: Unable to verify checksum for image00400000
+*** ERROR: Module load completed but symbols could not be loaded for image00400000
+image00400000+0x100e:
+<strong class="userinput"><code>0040100e 8b08            mov     ecx,dword ptr [eax]  ds:0023:00000000=????????</code></strong>
+[..]</pre><p>The access violation is caused when the value of <code class="literal">EAX</code>, which is <code class="literal">0x00000000</code>, gets referenced. You can get more information on the cause of the crash by using the debugger command <code class="literal">!analyze -v</code>:</p><a id="I_programlisting_d1e10024"/><pre class="programlisting">0:000&gt; <strong class="userinput"><code>!analyze -v</code></strong>
+[..]
+FAULTING_IP:
+image00400000+100e
+0040100e 8b08            mov     ecx,dword ptr [eax]
+
+EXCEPTION_RECORD:  ffffffff -- (.exr 0xffffffffffffffff)
+ExceptionAddress: 0040100e (image00400000+0x0000100e)
+   <strong class="userinput"><code>ExceptionCode: c0000005 (Access violation)</code></strong>
+  ExceptionFlags: 00000000
+NumberParameters: 2
+   Parameter[0]: 00000000
+   Parameter[1]: 00000000
+<strong class="userinput"><code>Attempt to read from address 00000000</code></strong>
+[..]</pre><p>NULL pointer dereferences usually lead to a crash of the vulnerable component (denial of service). Depending on the particular programming error, NULL pointer dereferences can also lead to arbitrary code execution.</p></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>A.2 NULL Pointer Dereferences</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="A.2 NULL Pointer Dereferences"><div class="titlepage"><div><div><h1 class="title"><a id="a.2_null_pointer_dereferences"/>A.2 NULL Pointer Dereferences</h1></div></div></div><p>Memory is divided into pages. Typically, a process, a thread, or the kernel cannot read from or write to a memory location on the zero page. <a class="xref" href="apas02.html#using_unowned_memoryman_example" title="Example A-2. Using unowned memory—an example NULL pointer dereference">Example A-2</a> shows a simple example of what happens if the zero page gets referenced due to a programming error.<a id="IDX-APP-A-0047" class="indexterm"/></p><div class="example"><a id="using_unowned_memoryman_example"/><p class="title">Example A-2. Using unowned memory—an example NULL pointer dereference</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02
+03    typedef struct pkt {
+04        char *  value;
+05    } pkt_t;
+06
+07    int
+08    main (void)
+09    {
+10        pkt_t *  packet  = NULL;
+11
+12        printf ("%s", packet-&gt;value);
+13
+14        return 0;
+15    }</pre></div></div><p>In line 10 of <a class="xref" href="apas02.html#using_unowned_memoryman_example" title="Example A-2. Using unowned memory—an example NULL pointer dereference">Example A-2</a> the data structure <code class="literal">packet</code> is initialized with <code class="literal">NULL</code>, and in line 12 a structure member gets referenced. Since <code class="literal">packet</code> points to <code class="literal">NULL</code>, this reference can be represented as <code class="literal">NULL-&gt;value</code>. This leads to a classic <span class="emphasis"><em>NULL pointer dereference</em></span> when the program tries to read a value from memory page zero. If you compile this program under Microsoft Windows and start it in the Windows Debugger WinDbg (see Section B.2), you get the following result:<a id="IDX-APP-A-0048" class="indexterm"/></p><a id="I_programlisting_d1e10005"/><pre class="programlisting">[..]
+(1334.12dc): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+<strong class="userinput"><code>eax=00000000</code></strong> ebx=7713b68f ecx=00000001 edx=77c55e74 esi=00000002 edi=00001772
+eip=0040100e esp=0012ff34 ebp=0012ff38 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+*** WARNING: Unable to verify checksum for image00400000
+*** ERROR: Module load completed but symbols could not be loaded for image00400000
+image00400000+0x100e:
+<strong class="userinput"><code>0040100e 8b08            mov     ecx,dword ptr [eax]  ds:0023:00000000=????????</code></strong>
+[..]</pre><p>The access violation is caused when the value of <code class="literal">EAX</code>, which is <code class="literal">0x00000000</code>, gets referenced. You can get more information on the cause of the crash by using the debugger command <code class="literal">!analyze -v</code>:</p><a id="I_programlisting_d1e10024"/><pre class="programlisting">0:000&gt; <strong class="userinput"><code>!analyze -v</code></strong>
+[..]
+FAULTING_IP:
+image00400000+100e
+0040100e 8b08            mov     ecx,dword ptr [eax]
+
+EXCEPTION_RECORD:  ffffffff -- (.exr 0xffffffffffffffff)
+ExceptionAddress: 0040100e (image00400000+0x0000100e)
+   <strong class="userinput"><code>ExceptionCode: c0000005 (Access violation)</code></strong>
+  ExceptionFlags: 00000000
+NumberParameters: 2
+   Parameter[0]: 00000000
+   Parameter[1]: 00000000
+<strong class="userinput"><code>Attempt to read from address 00000000</code></strong>
+[..]</pre><p>NULL pointer dereferences usually lead to a crash of the vulnerable component (denial of service). Depending on the particular programming error, NULL pointer dereferences can also lead to arbitrary code execution.</p></div></body></html>

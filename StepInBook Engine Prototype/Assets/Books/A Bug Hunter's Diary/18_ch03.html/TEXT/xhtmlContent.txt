@@ -1,0 +1,406 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 3. Escape from the WWW Zone</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="chapter" title="Chapter 3. Escape from the WWW Zone"><div class="titlepage"><div><div><h1 class="title"><a id="escape_from_the_www_zone"/>Chapter 3. Escape from the WWW Zone</h1></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Thursday, August 23, 2007</em></span></p><p><span class="emphasis"><em>Dear Diary</em></span>,</p></div><p>I’ve always been a big fan of vulnerabilities in operating system kernels because they’re usually quite interesting, very powerful, and tricky to exploit. I recently combed through several operating system kernels in search of bugs. One of the kernels that I searched through was the kernel of Sun Solaris. And guess what? I was successful. <span class="inlinemediaobject"><a id="I_inlinemediaobject3_d1e1706"/><img src="httpatomoreillycomsourcenostarchimages939227.png" alt=""/></span><a id="IDX-CHP-3-0001" class="indexterm"/><a id="IDX-CHP-3-0002" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>On January 27, 2010, Sun was acquired by Oracle Corporation. Oracle now generally refers to Solaris as “Oracle Solaris.”</em></span></p></div><div class="sect1" title="3.1 Vulnerability Discovery"><div class="titlepage"><div><div><h1 class="title"><a id="vulnerability_discovery-id1"/>3.1 Vulnerability Discovery</h1></div></div></div><p>Since the launch of OpenSolaris in June 2005, Sun has made most of its Solaris 10 operating system freely available as open source, including the kernel. So I downloaded the source code<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-1" class="footnoteref">23</a>]</sup> and started reading the kernel code, focusing on the parts that implement the user-to-kernel interfaces, like IOCTLs and system calls.</p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Input/output controls</em></span> (<span class="emphasis"><em>IOCTLs</em></span>) are used for communication between user-mode applications and the kernel.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-2" class="footnoteref">24</a>]</sup><a id="IDX-CHP-3-0003" class="indexterm"/><a id="IDX-CHP-3-0004" class="indexterm"/></p><p><span class="emphasis"><em>Any user-to-kernel interface or API that results in information being passed over to the kernel for processing creates a potential attack vector. The most commonly used are</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>IOCTLs</em></span></p></li><li class="listitem"><p><span class="emphasis"><em>System calls</em></span></p></li><li class="listitem"><p><span class="emphasis"><em>Filesystems</em></span></p></li><li class="listitem"><p><span class="emphasis"><em>Network stack</em></span></p></li><li class="listitem"><p><span class="emphasis"><em>Hooks of third-party drivers</em></span></p></li></ul></div></div><p>The vulnerability that I found is one of the most interesting I’ve discovered because its cause—an undefined error condition—is unusual for an exploitable vulnerability (compared to the average overflow bugs). It affects the implementation of the <code class="literal">SIOCGTUNPARAM</code> IOCTL call, which is part of the IP-in-IP tunneling mechanism provided by the Solaris kernel.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-3" class="footnoteref">25</a>]</sup></p><p>I took the following steps to find the vulnerability:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Step 1: List the IOCTLs of the kernel.</p></li><li class="listitem"><p>Step 2: Identify the input data.</p></li><li class="listitem"><p>Step 3: Trace the input data.</p></li></ul></div><p>These steps are described in detail below.</p><div class="sect2" title="Step 1: List the IOCTLs of the Kernel"><div class="titlepage"><div><div><h2 class="title"><a id="step_1_colon_list_the_ioctls_of_the_kern"/>Step 1: List the IOCTLs of the Kernel</h2></div></div></div><p>There are different ways to generate a list of the IOCTLs of a kernel. In this case, I simply searched the kernel source code for the customary IOCTL macros. Every IOCTL gets its own number, usually created by a macro. Depending on the IOCTL type, the Solaris kernel defines the following macros: <code class="literal">_IOR</code>, <code class="literal">_IOW</code>, and <code class="literal">_IOWR</code>. To list the IOCTLs, I changed to the directory where I unpacked the kernel source code and used the Unix <code class="literal">grep</code> command to search the code.</p><a id="I_programlisting3_d1e1807"/><pre class="programlisting">solaris$ <strong class="userinput"><code>pwd</code></strong>
+/exports/home/tk/on-src/usr/src/uts
+
+solaris$ <strong class="userinput"><code>grep -rnw -e _IOR -e _IOW -e _IOWR *</code></strong>
+[..]
+common/sys/sockio.h:208:#define SIOCTONLINK     _IOWR('i', 145, struct sioc_addr req)
+common/sys/sockio.h:210:#define SIOCTMYSITE     _IOWR('i', 146, struct sioc_addr req)
+common/sys/sockio.h:213:#define SIOCGTUNPARAM   _IOR('i',  147, struct iftun_req)
+common/sys/sockio.h:216:#define SIOCSTUNPARAM   _IOW('i',  148, struct iftun_req)
+common/sys/sockio.h:220:#define SIOCFIPSECONFIG _IOW('i',  149, 0) /* Flush Policy  */
+common/sys/sockio.h:221:#define SIOCSIPSECONFIG _IOW('i',  150, 0) /* Set Policy */
+common/sys/sockio.h:222:#define SIOCDIPSECONFIG _IOW('i',  151, 0) /* Delete Policy */
+common/sys/sockio.h:223:#define SIOCLIPSECONFIG _IOW('i',  152, 0) /* List Policy */
+[..]</pre><p>I now had a list of IOCTL names supported by the Solaris kernel. To find the source files that actually process these IOCTLs, I searched the whole kernel source for each IOCTL name on the list. Here is an example search for the <code class="literal">SIOCTONLINK</code> IOCTL:</p><a id="I_programlisting3_d1e1820"/><pre class="programlisting">solaris$ <strong class="userinput"><code>grep --include=*.c -rn SIOCTONLINK *</code></strong>
+common/inet/ip/ip.c:1267:    /* 145 */ { SIOCTONLINK,
+ sizeof (struct sioc_add rreq), → IPI_GET_CMD,</pre></div><div class="sect2" title="Step 2: Identify the Input Data"><div class="titlepage"><div><div><h2 class="title"><a id="step_2_colon_identify_the_input_data-id1"/>Step 2: Identify the Input Data</h2></div></div></div><p>The Solaris kernel provides different interfaces for IOCTL processing. The interface that is relevant for the vulnerability I found is a programming model called <span class="emphasis"><em>STREAMS</em></span>.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-4" class="footnoteref">26</a>]</sup> Intuitively, the fundamental STREAMS unit is called a <span class="emphasis"><em>Stream</em></span>, which is a data transfer path between a process in user space and the kernel. All kernel-level input and output under STREAMS are based on STREAMS messages, which usually contain the following elements: a data buffer, a data block, and a message block. The <span class="emphasis"><em>data buffer</em></span> is the location in memory where the actual data of the message is stored. The <span class="emphasis"><em>data block</em></span> (<code class="literal">struct datab</code>) describes the data buffer. The <span class="emphasis"><em>message block</em></span> (<code class="literal">struct msgb</code>) describes the data block and how the data is used.<a id="IDX-CHP-3-0005" class="indexterm"/><a id="IDX-CHP-3-0006" class="indexterm"/></p><p>The message block structure has the following public elements.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/sys/stream.h</em></span><sup>[<a href="ch03s05.html#ftn.CHP-3-FN-5" class="footnoteref">27</a>]</sup></p></dd></dl></div><a id="I_programlisting3_d1e1872"/><pre class="programlisting">[..]
+367    /*
+368     * Message block descriptor
+369     */
+370    typedef struct        msgb {
+371        struct    msgb    *b_next;
+372        struct    msgb    *b_prev;
+373        struct    msgb    *b_cont;
+<strong class="userinput"><code>374        unsigned char     *b_rptr;</code></strong>
+<strong class="userinput"><code>375        unsigned char     *b_wptr;</code></strong>
+<strong class="userinput"><code>376        struct datab      *b_datap;</code></strong>
+377        unsigned char     b_band;
+378        unsigned char     b_tag;
+379        unsigned short    b_flag;
+380        queue_t           *b_queue;    /* for sync queues */
+<strong class="userinput"><code>381    } mblk_t;</code></strong>
+[..]</pre><p>The structure elements <code class="literal">b_rptr</code> and <code class="literal">b_wptr</code> specify the current read and write pointers in the data buffer pointed to by <code class="literal">b_datap</code> (see <a class="xref" href="ch03.html#diagram_of_a_simple_streams_message" title="Figure 3-1. Diagram of a simple STREAMS message">Figure 3-1</a>).</p><div class="figure"><a id="diagram_of_a_simple_streams_message"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e1902"/><img src="httpatomoreillycomsourcenostarchimages939249.png.jpg" alt="Diagram of a simple STREAMS message"/></div></div><p class="title">Figure 3-1. Diagram of a simple STREAMS message</p></div><p>When using the STREAMS model, the IOCTL input data is referenced by the <code class="literal">b_rptr</code> element of the <code class="literal">msgb</code> structure, or its typedef <code class="literal">mblk_t</code>. Another important component of the STREAMS model is the so-called <span class="emphasis"><em>linked message blocks</em></span>. As described in the <span class="emphasis"><em>STREAMS Programming Guide</em></span>, “[a] complex message can consist of several linked message blocks. If buffer size is limited or if processing expands the message, multiple message blocks are formed in the message” (see <a class="xref" href="ch03.html#diagram_of_linked_streams_message_blocks" title="Figure 3-2. Diagram of linked STREAMS message blocks">Figure 3-2</a>).</p><div class="figure"><a id="diagram_of_linked_streams_message_blocks"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e1930"/><img src="httpatomoreillycomsourcenostarchimages939251.png.jpg" alt="Diagram of linked STREAMS message blocks"/></div></div><p class="title">Figure 3-2. Diagram of linked STREAMS message blocks</p></div></div><div class="sect2" title="Step 3: Trace the Input Data"><div class="titlepage"><div><div><h2 class="title"><a id="step_3_colon_trace_the_input_data-id1"/>Step 3: Trace the Input Data</h2></div></div></div><p>I then took the list of IOCTLs and started reviewing the code. As usual, I searched the code for input data and then traced that data while looking for coding errors. After a few hours, I found the vulnerability.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_process_ioctl()</code><sup>[<a href="ch03s05.html#ftn.CHP-3-FN-6" class="footnoteref">28</a>]</sup></p></dd></dl></div><a id="I_programlisting3_d1e1958"/><pre class="programlisting">[..]
+26692    void
+26693    ip_process_ioctl(ipsq_t *ipsq, queue_t *q, mblk_t *mp, void *arg)
+26694    {
+[..]
+<strong class="userinput"><code>26717        ci.ci_ipif = NULL;</code></strong>
+[..]
+<strong class="userinput"><code>26735        case TUN_CMD:</code></strong>
+26736            /*
+26737             * SIOC[GS]TUNPARAM appear here. ip_extract_tunreq returns
+26738             * a refheld ipif in ci.ci_ipif
+26739             */
+<strong class="userinput"><code>26740            err = ip_extract_tunreq(q, mp, &amp;ci.ci_ipif, ip_process_ioctl);</code></strong>
+[..]</pre><p>When a <code class="literal">SIOCGTUNPARAM</code> IOCTL request is sent to the kernel, the function <code class="literal">ip_process_ioctl()</code> is called. In line 26717, the value of <code class="literal">ci.ci_ipif</code> is explicitly set to <code class="literal">NULL</code>. Because of the <code class="literal">SIOCGTUNPARAM</code> IOCTL call, the switch case <code class="literal">TUN_CMD</code> is chosen (see line 26735), and the function <code class="literal">ip_extract_tunreq()</code> is called (see line 26740).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_extract_tunreq()</code><sup>[<a href="ch03s05.html#ftn.CHP-3-FN-7" class="footnoteref">29</a>]</sup></p></dd></dl></div><a id="I_programlisting3_d1e2011"/><pre class="programlisting">[..]
+8158    /*
+8159     * Parse an iftun_req structure coming down SIOC[GS]TUNPARAM ioctls,
+8160     * refhold and return the associated ipif
+8161     */
+8162    /* ARGSUSED */
+8163    int
+8164    ip_extract_tunreq(queue_t *q, <strong class="userinput"><code>mblk_t *mp</code></strong>, const ip_ioctl_cmd_t *ipip,
+8165        cmd_info_t *ci, ipsq_func_t func)
+8166    {
+8167        boolean_t exists;
+<strong class="userinput"><code>8168        struct iftun_req *ta;</code></strong>
+8169        ipif_t     *ipif;
+8170        ill_t      *ill;
+8171        boolean_t  isv6;
+8172        mblk_t     *mp1;
+8173        int        error;
+8174        conn_t     *connp;
+8175        ip_stack_t *ipst;
+8176
+8177        /* Existence verified in ip_wput_nondata */
+<strong class="userinput"><code>8178        mp1 = mp-&gt;b_cont-&gt;b_cont;</code></strong>
+<strong class="userinput"><code>8179        ta = (struct iftun_req *)mp1-&gt;b_rptr;</code></strong>
+8180        /*
+8181         * Null terminate the string to protect against buffer
+8182         * overrun. String was generated by user code and may not
+8183         * be trusted.
+8184         */
+8185       ta-&gt;ifta_lifr_name[LIFNAMSIZ - 1] = '\0';
+8186
+8187       connp = Q_TO_CONN(q);
+8188       isv6 = connp-&gt;conn_af_isv6;
+8189       ipst = connp-&gt;conn_netstack-&gt;netstack_ip;
+8190
+8191       /* Disallows implicit create */
+<strong class="userinput"><code>8192       ipif = ipif_lookup_on_name(ta-&gt;ifta_lifr_name,</code></strong>
+<strong class="userinput"><code>8193           mi_strlen(ta-&gt;ifta_lifr_name), B_FALSE, &amp;exists, isv6,</code></strong>
+<strong class="userinput"><code>8194           connp-&gt;conn_zoneid, CONNP_TO_WQ(connp), mp, func, &amp;error, ipst);</code></strong>
+[..]</pre><p>In line 8178, a linked STREAMS message block is referenced, and on line 8179, the structure <code class="literal">ta</code> is filled with the user-controlled IOCTL data. Later on, the function <code class="literal">ipif_lookup_on_name()</code> is called (see line 8192). The first two parameters of <code class="literal">ipif_lookup_on_name()</code> derive from the user-controllable data of structure <code class="literal">ta</code>.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ipif_lookup_on_name()</code></p></dd></dl></div><a id="I_programlisting3_d1e2066"/><pre class="programlisting">[..]
+19116    /*
+19117     * Find an IPIF based on the name passed in.  Names can be of the
+19118     * form &lt;phys&gt; (e.g., le0), &lt;phys&gt;:&lt;#&gt; (e.g., le0:1),
+19119     * The &lt;phys&gt; string can have forms like &lt;dev&gt;&lt;#&gt; (e.g., le0),
+19120     * &lt;dev&gt;&lt;#&gt;.&lt;module&gt; (e.g. le0.foo), or &lt;dev&gt;.&lt;module&gt;&lt;#&gt; (e.g. ip.tun3).
+19121     * When there is no colon, the implied unit id is zero. &lt;phys&gt; must
+19122     * correspond to the name of an ILL.  (May be called as writer.)
+19123     */
+19124    static ipif_t *
+19125    ipif_lookup_on_name(<strong class="userinput"><code>char *name</code></strong>, size_t namelen, boolean_t do_alloc,
+19126        boolean_t *exists, boolean_t isv6, zoneid_t zoneid, queue_t *q,
+19127        mblk_t *mp, ipsq_func_t func, int *error, ip_stack_t *ipst)
+19128    {
+[..]
+19138       if (error != NULL)
+<strong class="userinput"><code>19139           *error = 0;</code></strong>
+[..]
+<strong class="userinput"><code>19154       /* Look for a colon in the name. */</code></strong>
+<strong class="userinput"><code>19155       endp = &amp;name[namelen];</code></strong>
+<strong class="userinput"><code>19156       for (cp = endp; --cp &gt; name; ) {</code></strong>
+<strong class="userinput"><code>19157           if (*cp == IPIF_SEPARATOR_CHAR)</code></strong>
+<strong class="userinput"><code>19158               break;</code></strong>
+<strong class="userinput"><code>19159       }</code></strong>
+19160
+<strong class="userinput"><code>19161       if (*cp == IPIF_SEPARATOR_CHAR) {</code></strong>
+19162           /*
+19163            * Reject any non-decimal aliases for logical
+19164            * interfaces. Aliases with leading zeroes
+19165            * are also rejected as they introduce ambiguity
+19166            * in the naming of the interfaces.
+19167            * In order to confirm with existing semantics,
+19168            * and to not break any programs/script relying
+19169            * on that behaviour, if&lt;0&gt;:0 is considered to be
+19170            * a valid interface.
+19171            *
+19172            * If alias has two or more digits and the first
+19173            * is zero, fail.
+19174            */
+<strong class="userinput"><code>19175           if (&amp;cp[2] &lt; endp &amp;&amp; cp[1] == '0')</code></strong>
+<strong class="userinput"><code>19176               return (NULL);</code></strong>
+19177       }
+[..]</pre><p>In line 19139, the value of <code class="literal">error</code> is explicitly set to 0. Then in line 19161, the interface name provided by the user-controlled IOCTL data is checked for the presence of a colon (<code class="literal">IPIF_SEPARATOR_CHAR</code> is defined as a colon). If a colon is found in the name, the bytes after the colon are treated as an interface alias. If an alias has two or more digits and the first is zero (ASCII zero or hexadecimal <code class="literal">0x30</code>; see line 19175), the function <code class="literal">ipif_lookup_on_name()</code> returns to <code class="literal">ip_extract_tunreq()</code> with a return value of <code class="literal">NULL</code>, and the variable <code class="literal">error</code> is still set to 0 (see lines 19139 and 19176).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_extract_tunreq()</code></p></dd></dl></div><a id="I_programlisting3_d1e2144"/><pre class="programlisting">[..]
+8192    ipif = ipif_lookup_on_name(ta-&gt;ifta_lifr_name,
+8193        mi_strlen(ta-&gt;ifta_lifr_name), B_FALSE, &amp;exists, isv6,
+8194        connp-&gt;conn_zoneid, CONNP_TO_WQ(connp), mp, func, &amp;error, ipst);
+8195    if (ipif == NULL)
+8196        return (error);
+[..]</pre><p>Back in <code class="literal">ip_extract_tunreq()</code>, the pointer <code class="literal">ipif</code> is set to <code class="literal">NULL</code> if <code class="literal">ipif_lookup_on_name()</code> returns that value (see line 8192). Since <code class="literal">ipif</code> is <code class="literal">NULL</code>, the <code class="literal">if</code> statement in line 8195 returns <code class="literal">TRUE</code>, and line 8196 is executed. The <code class="literal">ip_extract_tunreq()</code> function then returns to <code class="literal">ip_process_ioctl()</code> with <code class="literal">error</code> as a return value, which is still set to 0.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_process_ioctl()</code></p></dd></dl></div><a id="I_programlisting3_d1e2199"/><pre class="programlisting">[..]
+<strong class="userinput"><code>26717   ci.ci_ipif = NULL;</code></strong>
+[..]
+26735     case TUN_CMD:
+26736         /*
+26737          * SIOC[GS]TUNPARAM appear here. ip_extract_tunreq returns
+26738          * a refheld ipif in ci.ci_ipif
+26739          */
+<strong class="userinput"><code>26740         err = ip_extract_tunreq(q, mp, &amp;ci.ci_ipif, ip_process_ioctl);</code></strong>
+<strong class="userinput"><code>26741         if (err != 0) {</code></strong>
+26742             ip_ioctl_finish(q, mp, err, IPI2MODE(ipip), NULL);
+26743             return;
+26744         }
+[..]
+<strong class="userinput"><code>26788         err = (*ipip-&gt;ipi_func)(ci.ci_ipif, ci.ci_sin, q, mp, ipip,</code></strong>
+<strong class="userinput"><code>26789             ci.ci_lifr);</code></strong>
+[..]</pre><p>Back in <code class="literal">ip_process_ioctl()</code>, the variable <code class="literal">err</code> is set to 0 since <code class="literal">ip_extract_tunreq()</code> returns that value (see line 26740). Because <code class="literal">err</code> equals 0, the <code class="literal">if</code> statement in line 26741 returns <code class="literal">FALSE</code>, and lines 26742 and 26743 are not executed. In line 26788, the function pointed to by <code class="literal">ipip-&gt;ipi_func</code>—in this case the function <code class="literal">ip_sioctl_tunparam()</code>—is called while the first parameter, <code class="literal">ci.ci_ipif</code>, is still set to <code class="literal">NULL</code> (see line 26717).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_sioctl_tunparam()</code></p></dd></dl></div><a id="I_programlisting3_d1e2266"/><pre class="programlisting">[..]
+9401    int
+9402    ip_sioctl_tunparam(<strong class="userinput"><code>ipif_t *ipif</code></strong>, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
+9403        ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
+9404    {
+[..]
+<strong class="userinput"><code>9432        ill = ipif-&gt;ipif_ill;</code></strong>
+[..]</pre><p>Since the first parameter of <code class="literal">ip_sioctl_tunparam()</code> is <code class="literal">NULL</code>, the reference <code class="literal">ipif-&gt;ipif_ill</code> in line 9432 can be represented as <code class="literal">NULL-&gt;ipif_ill</code>, which is a classic NULL pointer dereference. If this NULL pointer dereference is triggered, the whole system will crash due to a kernel panic. (See Section A.2 for more information on NULL pointer dereferences.)<a id="IDX-CHP-3-0007" class="indexterm"/><a id="IDX-CHP-3-0008" class="indexterm"/></p><p>Summary of the results so far:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>An unprivileged user of a Solaris system can call the <code class="literal">SIOCGTUNPARAM</code> IOCTL (see (1) in <a class="xref" href="ch03.html#summary_of_the_results_so_far._an_unpriv" title="Figure 3-3. Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel.">Figure 3-3</a>).</p></li><li class="listitem"><p>If the IOCTL data sent to the kernel is carefully crafted—there has to be an interface name with a colon directly followed by an ASCII zero and another arbitrary digit—it’s possible to trigger a NULL pointer dereference (see (2) in <a class="xref" href="ch03.html#summary_of_the_results_so_far._an_unpriv" title="Figure 3-3. Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel.">Figure 3-3</a>) that leads to a system crash (see (3) in <a class="xref" href="ch03.html#summary_of_the_results_so_far._an_unpriv" title="Figure 3-3. Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel.">Figure 3-3</a>).</p></li></ul></div><p>But why is it possible to trigger that NULL pointer dereference? Where exactly is the coding error that leads to the bug?</p><p>The problem is that <code class="literal">ipif_lookup_on_name()</code> can be forced to return to its caller function without an appropriate error condition being set.</p><p>This bug exists in part because the <code class="literal">ipif_lookup_on_name()</code> function reports error conditions to its caller in two different ways: through the return value of the function (<code class="literal">return (null)</code>) as well as through the variable <code class="literal">error</code> (<code class="literal">*error != 0</code>). Each time the function is called, the authors of the kernel code must ensure that both error conditions are properly set and are properly evaluated within the caller function. Such a coding style is error-prone and therefore not recommended. The vulnerability described in this chapter is an excellent example of the kind of problem that can arise from such code.</p><div class="figure"><a id="summary_of_the_results_so_far._an_unpriv"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e2337"/><img src="httpatomoreillycomsourcenostarchimages939253.png.jpg" alt="Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel."/></div></div><p class="title">Figure 3-3. Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel.</p></div><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ipif_lookup_on_name()</code></p></dd></dl></div><a id="I_programlisting3_d1e2359"/><pre class="programlisting">[..]
+19124    static ipif_t *
+19125    ipif_lookup_on_name(char *name, size_t namelen, boolean_t do_alloc,
+19126        boolean_t *exists, boolean_t isv6, zoneid_t zoneid, queue_t *q,
+19127        mblk_t *mp, ipsq_func_t func, int *error, ip_stack_t *ipst)
+19128    {
+[..]
+19138       if (error != NULL)
+<strong class="userinput"><code>19139           *error = 0;</code></strong>
+[..]
+19161       if (*cp == IPIF_SEPARATOR_CHAR) {
+19162           /*
+19163            * Reject any non-decimal aliases for logical
+19164            * interfaces. Aliases with leading zeroes
+19165            * are also rejected as they introduce ambiguity
+19166            * in the naming of the interfaces.
+19167            * In order to confirm with existing semantics,
+19168            * and to not break any programs/script relying
+19169            * on that behaviour, if&lt;0&gt;:0 is considered to be
+19170            * a valid interface.
+19171            *
+19172            * If alias has two or more digits and the first
+19173            * is zero, fail.
+19174            */
+<strong class="userinput"><code>19175           if (&amp;cp[2] &lt; endp &amp;&amp; cp[1] == '0')</code></strong>
+<strong class="userinput"><code>19176               return (NULL);</code></strong>
+19177       }
+[..]</pre><p>In line 19139, the value of <code class="literal">error</code>, which holds one of the error conditions, is explicitly set to 0. Error condition 0 means that no error has occurred so far. By supplying a colon directly followed by an ASCII zero and an arbitrary digit in the interface name, it is possible to trigger the code in line 19176, which leads to a return to the caller function. The problem is that no valid error condition is set for <code class="literal">error</code> before the function returns. So <code class="literal">ipif_lookup_on_name()</code> returns to <code class="literal">ip_extract_tunreq()</code> with <code class="literal">error</code> still set to 0.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_extract_tunreq()</code></p></dd></dl></div><a id="I_programlisting3_d1e2404"/><pre class="programlisting">[..]
+8192    ipif = ipif_lookup_on_name(ta-&gt;ifta_lifr_name,
+8193        mi_strlen(ta-&gt;ifta_lifr_name), B_FALSE, &amp;exists, isv6,
+8194        connp-&gt;conn_zoneid, CONNP_TO_WQ(connp), mp, func, <strong class="userinput"><code>&amp;error</code></strong>, ipst);
+8195    if (ipif == NULL)
+<strong class="userinput"><code>8196        return (error);</code></strong>
+[..]</pre><p>Back in <code class="literal">ip_extract_tunreq()</code>, the error condition is returned to its caller function <code class="literal">ip_process_ioctl()</code> (see line 8196).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_process_ioctl()</code></p></dd></dl></div><a id="I_programlisting3_d1e2438"/><pre class="programlisting">[..]
+26735     case TUN_CMD:
+26736         /*
+26737          * SIOC[GS]TUNPARAM appear here. ip_extract_tunreq returns
+26738          * a refheld ipif in ci.ci_ipif
+26739          */
+<strong class="userinput"><code>26740         err = ip_extract_tunreq(q, mp, &amp;ci.ci_ipif, ip_process_ioctl);</code></strong>
+<strong class="userinput"><code>26741         if (err != 0) {</code></strong>
+26742             ip_ioctl_finish(q, mp, err, IPI2MODE(ipip), NULL);
+26743             return;
+26744         }
+[..]
+<strong class="userinput"><code>26788         err = (*ipip-&gt;ipi_func)(ci.ci_ipif, ci.ci_sin, q, mp, ipip,</code></strong>
+<strong class="userinput"><code>26789             ci.ci_lifr);</code></strong>
+[..]</pre><p>Then in <code class="literal">ip_process_ioctl()</code>, the error condition is still set to 0. Thus, the <code class="literal">if</code> statement in line 26741 returns <code class="literal">FALSE</code>, and the kernel continues the execution of the rest of the function leading to the NULL pointer dereference in <code class="literal">ip_sioctl_tunparam()</code>.</p><p>What a nice bug!</p><p><a class="xref" href="ch03.html#call_graph_summarizing_the_relationships" title="Figure 3-4. Call graph summarizing the relationships of the functions involved in the NULL pointer dereference bug. The numbers shown refer to the chronological order of events.">Figure 3-4</a> shows a call graph summarizing the relationships of the functions involved in the NULL pointer dereference bug.</p><div class="figure"><a id="call_graph_summarizing_the_relationships"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e2474"/><img src="httpatomoreillycomsourcenostarchimages939255.png.jpg" alt="Call graph summarizing the relationships of the functions involved in the NULL pointer dereference bug. The numbers shown refer to the chronological order of events."/></div></div><p class="title">Figure 3-4. Call graph summarizing the relationships of the functions involved in the NULL pointer dereference bug. The numbers shown refer to the chronological order of events.</p></div></div></div></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 3. Escape from the WWW Zone</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="chapter" title="Chapter 3. Escape from the WWW Zone"><div class="titlepage"><div><div><h1 class="title"><a id="escape_from_the_www_zone"/>Chapter 3. Escape from the WWW Zone</h1></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Thursday, August 23, 2007</em></span></p><p><span class="emphasis"><em>Dear Diary</em></span>,</p></div><p>I’ve always been a big fan of vulnerabilities in operating system kernels because they’re usually quite interesting, very powerful, and tricky to exploit. I recently combed through several operating system kernels in search of bugs. One of the kernels that I searched through was the kernel of Sun Solaris. And guess what? I was successful. <span class="inlinemediaobject"><a id="I_inlinemediaobject3_d1e1706"/><img src="httpatomoreillycomsourcenostarchimages939227.png" alt=""/></span><a id="IDX-CHP-3-0001" class="indexterm"/><a id="IDX-CHP-3-0002" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>On January 27, 2010, Sun was acquired by Oracle Corporation. Oracle now generally refers to Solaris as “Oracle Solaris.”</em></span></p></div><div class="sect1" title="3.1 Vulnerability Discovery"><div class="titlepage"><div><div><h1 class="title"><a id="vulnerability_discovery-id1"/>3.1 Vulnerability Discovery</h1></div></div></div><p>Since the launch of OpenSolaris in June 2005, Sun has made most of its Solaris 10 operating system freely available as open source, including the kernel. So I downloaded the source code<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-1" class="footnoteref">23</a>]</sup> and started reading the kernel code, focusing on the parts that implement the user-to-kernel interfaces, like IOCTLs and system calls.</p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Input/output controls</em></span> (<span class="emphasis"><em>IOCTLs</em></span>) are used for communication between user-mode applications and the kernel.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-2" class="footnoteref">24</a>]</sup><a id="IDX-CHP-3-0003" class="indexterm"/><a id="IDX-CHP-3-0004" class="indexterm"/></p><p><span class="emphasis"><em>Any user-to-kernel interface or API that results in information being passed over to the kernel for processing creates a potential attack vector. The most commonly used are</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>IOCTLs</em></span></p></li><li class="listitem"><p><span class="emphasis"><em>System calls</em></span></p></li><li class="listitem"><p><span class="emphasis"><em>Filesystems</em></span></p></li><li class="listitem"><p><span class="emphasis"><em>Network stack</em></span></p></li><li class="listitem"><p><span class="emphasis"><em>Hooks of third-party drivers</em></span></p></li></ul></div></div><p>The vulnerability that I found is one of the most interesting I’ve discovered because its cause—an undefined error condition—is unusual for an exploitable vulnerability (compared to the average overflow bugs). It affects the implementation of the <code class="literal">SIOCGTUNPARAM</code> IOCTL call, which is part of the IP-in-IP tunneling mechanism provided by the Solaris kernel.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-3" class="footnoteref">25</a>]</sup></p><p>I took the following steps to find the vulnerability:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Step 1: List the IOCTLs of the kernel.</p></li><li class="listitem"><p>Step 2: Identify the input data.</p></li><li class="listitem"><p>Step 3: Trace the input data.</p></li></ul></div><p>These steps are described in detail below.</p><div class="sect2" title="Step 1: List the IOCTLs of the Kernel"><div class="titlepage"><div><div><h2 class="title"><a id="step_1_colon_list_the_ioctls_of_the_kern"/>Step 1: List the IOCTLs of the Kernel</h2></div></div></div><p>There are different ways to generate a list of the IOCTLs of a kernel. In this case, I simply searched the kernel source code for the customary IOCTL macros. Every IOCTL gets its own number, usually created by a macro. Depending on the IOCTL type, the Solaris kernel defines the following macros: <code class="literal">_IOR</code>, <code class="literal">_IOW</code>, and <code class="literal">_IOWR</code>. To list the IOCTLs, I changed to the directory where I unpacked the kernel source code and used the Unix <code class="literal">grep</code> command to search the code.</p><a id="I_programlisting3_d1e1807"/><pre class="programlisting">solaris$ <strong class="userinput"><code>pwd</code></strong>
+/exports/home/tk/on-src/usr/src/uts
+
+solaris$ <strong class="userinput"><code>grep -rnw -e _IOR -e _IOW -e _IOWR *</code></strong>
+[..]
+common/sys/sockio.h:208:#define SIOCTONLINK     _IOWR('i', 145, struct sioc_addr req)
+common/sys/sockio.h:210:#define SIOCTMYSITE     _IOWR('i', 146, struct sioc_addr req)
+common/sys/sockio.h:213:#define SIOCGTUNPARAM   _IOR('i',  147, struct iftun_req)
+common/sys/sockio.h:216:#define SIOCSTUNPARAM   _IOW('i',  148, struct iftun_req)
+common/sys/sockio.h:220:#define SIOCFIPSECONFIG _IOW('i',  149, 0) /* Flush Policy  */
+common/sys/sockio.h:221:#define SIOCSIPSECONFIG _IOW('i',  150, 0) /* Set Policy */
+common/sys/sockio.h:222:#define SIOCDIPSECONFIG _IOW('i',  151, 0) /* Delete Policy */
+common/sys/sockio.h:223:#define SIOCLIPSECONFIG _IOW('i',  152, 0) /* List Policy */
+[..]</pre><p>I now had a list of IOCTL names supported by the Solaris kernel. To find the source files that actually process these IOCTLs, I searched the whole kernel source for each IOCTL name on the list. Here is an example search for the <code class="literal">SIOCTONLINK</code> IOCTL:</p><a id="I_programlisting3_d1e1820"/><pre class="programlisting">solaris$ <strong class="userinput"><code>grep --include=*.c -rn SIOCTONLINK *</code></strong>
+common/inet/ip/ip.c:1267:    /* 145 */ { SIOCTONLINK,
+ sizeof (struct sioc_add rreq), → IPI_GET_CMD,</pre></div><div class="sect2" title="Step 2: Identify the Input Data"><div class="titlepage"><div><div><h2 class="title"><a id="step_2_colon_identify_the_input_data-id1"/>Step 2: Identify the Input Data</h2></div></div></div><p>The Solaris kernel provides different interfaces for IOCTL processing. The interface that is relevant for the vulnerability I found is a programming model called <span class="emphasis"><em>STREAMS</em></span>.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-4" class="footnoteref">26</a>]</sup> Intuitively, the fundamental STREAMS unit is called a <span class="emphasis"><em>Stream</em></span>, which is a data transfer path between a process in user space and the kernel. All kernel-level input and output under STREAMS are based on STREAMS messages, which usually contain the following elements: a data buffer, a data block, and a message block. The <span class="emphasis"><em>data buffer</em></span> is the location in memory where the actual data of the message is stored. The <span class="emphasis"><em>data block</em></span> (<code class="literal">struct datab</code>) describes the data buffer. The <span class="emphasis"><em>message block</em></span> (<code class="literal">struct msgb</code>) describes the data block and how the data is used.<a id="IDX-CHP-3-0005" class="indexterm"/><a id="IDX-CHP-3-0006" class="indexterm"/></p><p>The message block structure has the following public elements.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/sys/stream.h</em></span><sup>[<a href="ch03s05.html#ftn.CHP-3-FN-5" class="footnoteref">27</a>]</sup></p></dd></dl></div><a id="I_programlisting3_d1e1872"/><pre class="programlisting">[..]
+367    /*
+368     * Message block descriptor
+369     */
+370    typedef struct        msgb {
+371        struct    msgb    *b_next;
+372        struct    msgb    *b_prev;
+373        struct    msgb    *b_cont;
+<strong class="userinput"><code>374        unsigned char     *b_rptr;</code></strong>
+<strong class="userinput"><code>375        unsigned char     *b_wptr;</code></strong>
+<strong class="userinput"><code>376        struct datab      *b_datap;</code></strong>
+377        unsigned char     b_band;
+378        unsigned char     b_tag;
+379        unsigned short    b_flag;
+380        queue_t           *b_queue;    /* for sync queues */
+<strong class="userinput"><code>381    } mblk_t;</code></strong>
+[..]</pre><p>The structure elements <code class="literal">b_rptr</code> and <code class="literal">b_wptr</code> specify the current read and write pointers in the data buffer pointed to by <code class="literal">b_datap</code> (see <a class="xref" href="ch03.html#diagram_of_a_simple_streams_message" title="Figure 3-1. Diagram of a simple STREAMS message">Figure 3-1</a>).</p><div class="figure"><a id="diagram_of_a_simple_streams_message"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e1902"/><img src="httpatomoreillycomsourcenostarchimages939249.png.jpg" alt="Diagram of a simple STREAMS message"/></div></div><p class="title">Figure 3-1. Diagram of a simple STREAMS message</p></div><p>When using the STREAMS model, the IOCTL input data is referenced by the <code class="literal">b_rptr</code> element of the <code class="literal">msgb</code> structure, or its typedef <code class="literal">mblk_t</code>. Another important component of the STREAMS model is the so-called <span class="emphasis"><em>linked message blocks</em></span>. As described in the <span class="emphasis"><em>STREAMS Programming Guide</em></span>, “[a] complex message can consist of several linked message blocks. If buffer size is limited or if processing expands the message, multiple message blocks are formed in the message” (see <a class="xref" href="ch03.html#diagram_of_linked_streams_message_blocks" title="Figure 3-2. Diagram of linked STREAMS message blocks">Figure 3-2</a>).</p><div class="figure"><a id="diagram_of_linked_streams_message_blocks"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e1930"/><img src="httpatomoreillycomsourcenostarchimages939251.png.jpg" alt="Diagram of linked STREAMS message blocks"/></div></div><p class="title">Figure 3-2. Diagram of linked STREAMS message blocks</p></div></div><div class="sect2" title="Step 3: Trace the Input Data"><div class="titlepage"><div><div><h2 class="title"><a id="step_3_colon_trace_the_input_data-id1"/>Step 3: Trace the Input Data</h2></div></div></div><p>I then took the list of IOCTLs and started reviewing the code. As usual, I searched the code for input data and then traced that data while looking for coding errors. After a few hours, I found the vulnerability.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_process_ioctl()</code><sup>[<a href="ch03s05.html#ftn.CHP-3-FN-6" class="footnoteref">28</a>]</sup></p></dd></dl></div><a id="I_programlisting3_d1e1958"/><pre class="programlisting">[..]
+26692    void
+26693    ip_process_ioctl(ipsq_t *ipsq, queue_t *q, mblk_t *mp, void *arg)
+26694    {
+[..]
+<strong class="userinput"><code>26717        ci.ci_ipif = NULL;</code></strong>
+[..]
+<strong class="userinput"><code>26735        case TUN_CMD:</code></strong>
+26736            /*
+26737             * SIOC[GS]TUNPARAM appear here. ip_extract_tunreq returns
+26738             * a refheld ipif in ci.ci_ipif
+26739             */
+<strong class="userinput"><code>26740            err = ip_extract_tunreq(q, mp, &amp;ci.ci_ipif, ip_process_ioctl);</code></strong>
+[..]</pre><p>When a <code class="literal">SIOCGTUNPARAM</code> IOCTL request is sent to the kernel, the function <code class="literal">ip_process_ioctl()</code> is called. In line 26717, the value of <code class="literal">ci.ci_ipif</code> is explicitly set to <code class="literal">NULL</code>. Because of the <code class="literal">SIOCGTUNPARAM</code> IOCTL call, the switch case <code class="literal">TUN_CMD</code> is chosen (see line 26735), and the function <code class="literal">ip_extract_tunreq()</code> is called (see line 26740).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_extract_tunreq()</code><sup>[<a href="ch03s05.html#ftn.CHP-3-FN-7" class="footnoteref">29</a>]</sup></p></dd></dl></div><a id="I_programlisting3_d1e2011"/><pre class="programlisting">[..]
+8158    /*
+8159     * Parse an iftun_req structure coming down SIOC[GS]TUNPARAM ioctls,
+8160     * refhold and return the associated ipif
+8161     */
+8162    /* ARGSUSED */
+8163    int
+8164    ip_extract_tunreq(queue_t *q, <strong class="userinput"><code>mblk_t *mp</code></strong>, const ip_ioctl_cmd_t *ipip,
+8165        cmd_info_t *ci, ipsq_func_t func)
+8166    {
+8167        boolean_t exists;
+<strong class="userinput"><code>8168        struct iftun_req *ta;</code></strong>
+8169        ipif_t     *ipif;
+8170        ill_t      *ill;
+8171        boolean_t  isv6;
+8172        mblk_t     *mp1;
+8173        int        error;
+8174        conn_t     *connp;
+8175        ip_stack_t *ipst;
+8176
+8177        /* Existence verified in ip_wput_nondata */
+<strong class="userinput"><code>8178        mp1 = mp-&gt;b_cont-&gt;b_cont;</code></strong>
+<strong class="userinput"><code>8179        ta = (struct iftun_req *)mp1-&gt;b_rptr;</code></strong>
+8180        /*
+8181         * Null terminate the string to protect against buffer
+8182         * overrun. String was generated by user code and may not
+8183         * be trusted.
+8184         */
+8185       ta-&gt;ifta_lifr_name[LIFNAMSIZ - 1] = '\0';
+8186
+8187       connp = Q_TO_CONN(q);
+8188       isv6 = connp-&gt;conn_af_isv6;
+8189       ipst = connp-&gt;conn_netstack-&gt;netstack_ip;
+8190
+8191       /* Disallows implicit create */
+<strong class="userinput"><code>8192       ipif = ipif_lookup_on_name(ta-&gt;ifta_lifr_name,</code></strong>
+<strong class="userinput"><code>8193           mi_strlen(ta-&gt;ifta_lifr_name), B_FALSE, &amp;exists, isv6,</code></strong>
+<strong class="userinput"><code>8194           connp-&gt;conn_zoneid, CONNP_TO_WQ(connp), mp, func, &amp;error, ipst);</code></strong>
+[..]</pre><p>In line 8178, a linked STREAMS message block is referenced, and on line 8179, the structure <code class="literal">ta</code> is filled with the user-controlled IOCTL data. Later on, the function <code class="literal">ipif_lookup_on_name()</code> is called (see line 8192). The first two parameters of <code class="literal">ipif_lookup_on_name()</code> derive from the user-controllable data of structure <code class="literal">ta</code>.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ipif_lookup_on_name()</code></p></dd></dl></div><a id="I_programlisting3_d1e2066"/><pre class="programlisting">[..]
+19116    /*
+19117     * Find an IPIF based on the name passed in.  Names can be of the
+19118     * form &lt;phys&gt; (e.g., le0), &lt;phys&gt;:&lt;#&gt; (e.g., le0:1),
+19119     * The &lt;phys&gt; string can have forms like &lt;dev&gt;&lt;#&gt; (e.g., le0),
+19120     * &lt;dev&gt;&lt;#&gt;.&lt;module&gt; (e.g. le0.foo), or &lt;dev&gt;.&lt;module&gt;&lt;#&gt; (e.g. ip.tun3).
+19121     * When there is no colon, the implied unit id is zero. &lt;phys&gt; must
+19122     * correspond to the name of an ILL.  (May be called as writer.)
+19123     */
+19124    static ipif_t *
+19125    ipif_lookup_on_name(<strong class="userinput"><code>char *name</code></strong>, size_t namelen, boolean_t do_alloc,
+19126        boolean_t *exists, boolean_t isv6, zoneid_t zoneid, queue_t *q,
+19127        mblk_t *mp, ipsq_func_t func, int *error, ip_stack_t *ipst)
+19128    {
+[..]
+19138       if (error != NULL)
+<strong class="userinput"><code>19139           *error = 0;</code></strong>
+[..]
+<strong class="userinput"><code>19154       /* Look for a colon in the name. */</code></strong>
+<strong class="userinput"><code>19155       endp = &amp;name[namelen];</code></strong>
+<strong class="userinput"><code>19156       for (cp = endp; --cp &gt; name; ) {</code></strong>
+<strong class="userinput"><code>19157           if (*cp == IPIF_SEPARATOR_CHAR)</code></strong>
+<strong class="userinput"><code>19158               break;</code></strong>
+<strong class="userinput"><code>19159       }</code></strong>
+19160
+<strong class="userinput"><code>19161       if (*cp == IPIF_SEPARATOR_CHAR) {</code></strong>
+19162           /*
+19163            * Reject any non-decimal aliases for logical
+19164            * interfaces. Aliases with leading zeroes
+19165            * are also rejected as they introduce ambiguity
+19166            * in the naming of the interfaces.
+19167            * In order to confirm with existing semantics,
+19168            * and to not break any programs/script relying
+19169            * on that behaviour, if&lt;0&gt;:0 is considered to be
+19170            * a valid interface.
+19171            *
+19172            * If alias has two or more digits and the first
+19173            * is zero, fail.
+19174            */
+<strong class="userinput"><code>19175           if (&amp;cp[2] &lt; endp &amp;&amp; cp[1] == '0')</code></strong>
+<strong class="userinput"><code>19176               return (NULL);</code></strong>
+19177       }
+[..]</pre><p>In line 19139, the value of <code class="literal">error</code> is explicitly set to 0. Then in line 19161, the interface name provided by the user-controlled IOCTL data is checked for the presence of a colon (<code class="literal">IPIF_SEPARATOR_CHAR</code> is defined as a colon). If a colon is found in the name, the bytes after the colon are treated as an interface alias. If an alias has two or more digits and the first is zero (ASCII zero or hexadecimal <code class="literal">0x30</code>; see line 19175), the function <code class="literal">ipif_lookup_on_name()</code> returns to <code class="literal">ip_extract_tunreq()</code> with a return value of <code class="literal">NULL</code>, and the variable <code class="literal">error</code> is still set to 0 (see lines 19139 and 19176).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_extract_tunreq()</code></p></dd></dl></div><a id="I_programlisting3_d1e2144"/><pre class="programlisting">[..]
+8192    ipif = ipif_lookup_on_name(ta-&gt;ifta_lifr_name,
+8193        mi_strlen(ta-&gt;ifta_lifr_name), B_FALSE, &amp;exists, isv6,
+8194        connp-&gt;conn_zoneid, CONNP_TO_WQ(connp), mp, func, &amp;error, ipst);
+8195    if (ipif == NULL)
+8196        return (error);
+[..]</pre><p>Back in <code class="literal">ip_extract_tunreq()</code>, the pointer <code class="literal">ipif</code> is set to <code class="literal">NULL</code> if <code class="literal">ipif_lookup_on_name()</code> returns that value (see line 8192). Since <code class="literal">ipif</code> is <code class="literal">NULL</code>, the <code class="literal">if</code> statement in line 8195 returns <code class="literal">TRUE</code>, and line 8196 is executed. The <code class="literal">ip_extract_tunreq()</code> function then returns to <code class="literal">ip_process_ioctl()</code> with <code class="literal">error</code> as a return value, which is still set to 0.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_process_ioctl()</code></p></dd></dl></div><a id="I_programlisting3_d1e2199"/><pre class="programlisting">[..]
+<strong class="userinput"><code>26717   ci.ci_ipif = NULL;</code></strong>
+[..]
+26735     case TUN_CMD:
+26736         /*
+26737          * SIOC[GS]TUNPARAM appear here. ip_extract_tunreq returns
+26738          * a refheld ipif in ci.ci_ipif
+26739          */
+<strong class="userinput"><code>26740         err = ip_extract_tunreq(q, mp, &amp;ci.ci_ipif, ip_process_ioctl);</code></strong>
+<strong class="userinput"><code>26741         if (err != 0) {</code></strong>
+26742             ip_ioctl_finish(q, mp, err, IPI2MODE(ipip), NULL);
+26743             return;
+26744         }
+[..]
+<strong class="userinput"><code>26788         err = (*ipip-&gt;ipi_func)(ci.ci_ipif, ci.ci_sin, q, mp, ipip,</code></strong>
+<strong class="userinput"><code>26789             ci.ci_lifr);</code></strong>
+[..]</pre><p>Back in <code class="literal">ip_process_ioctl()</code>, the variable <code class="literal">err</code> is set to 0 since <code class="literal">ip_extract_tunreq()</code> returns that value (see line 26740). Because <code class="literal">err</code> equals 0, the <code class="literal">if</code> statement in line 26741 returns <code class="literal">FALSE</code>, and lines 26742 and 26743 are not executed. In line 26788, the function pointed to by <code class="literal">ipip-&gt;ipi_func</code>—in this case the function <code class="literal">ip_sioctl_tunparam()</code>—is called while the first parameter, <code class="literal">ci.ci_ipif</code>, is still set to <code class="literal">NULL</code> (see line 26717).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_sioctl_tunparam()</code></p></dd></dl></div><a id="I_programlisting3_d1e2266"/><pre class="programlisting">[..]
+9401    int
+9402    ip_sioctl_tunparam(<strong class="userinput"><code>ipif_t *ipif</code></strong>, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
+9403        ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
+9404    {
+[..]
+<strong class="userinput"><code>9432        ill = ipif-&gt;ipif_ill;</code></strong>
+[..]</pre><p>Since the first parameter of <code class="literal">ip_sioctl_tunparam()</code> is <code class="literal">NULL</code>, the reference <code class="literal">ipif-&gt;ipif_ill</code> in line 9432 can be represented as <code class="literal">NULL-&gt;ipif_ill</code>, which is a classic NULL pointer dereference. If this NULL pointer dereference is triggered, the whole system will crash due to a kernel panic. (See Section A.2 for more information on NULL pointer dereferences.)<a id="IDX-CHP-3-0007" class="indexterm"/><a id="IDX-CHP-3-0008" class="indexterm"/></p><p>Summary of the results so far:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>An unprivileged user of a Solaris system can call the <code class="literal">SIOCGTUNPARAM</code> IOCTL (see (1) in <a class="xref" href="ch03.html#summary_of_the_results_so_far._an_unpriv" title="Figure 3-3. Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel.">Figure 3-3</a>).</p></li><li class="listitem"><p>If the IOCTL data sent to the kernel is carefully crafted—there has to be an interface name with a colon directly followed by an ASCII zero and another arbitrary digit—it’s possible to trigger a NULL pointer dereference (see (2) in <a class="xref" href="ch03.html#summary_of_the_results_so_far._an_unpriv" title="Figure 3-3. Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel.">Figure 3-3</a>) that leads to a system crash (see (3) in <a class="xref" href="ch03.html#summary_of_the_results_so_far._an_unpriv" title="Figure 3-3. Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel.">Figure 3-3</a>).</p></li></ul></div><p>But why is it possible to trigger that NULL pointer dereference? Where exactly is the coding error that leads to the bug?</p><p>The problem is that <code class="literal">ipif_lookup_on_name()</code> can be forced to return to its caller function without an appropriate error condition being set.</p><p>This bug exists in part because the <code class="literal">ipif_lookup_on_name()</code> function reports error conditions to its caller in two different ways: through the return value of the function (<code class="literal">return (null)</code>) as well as through the variable <code class="literal">error</code> (<code class="literal">*error != 0</code>). Each time the function is called, the authors of the kernel code must ensure that both error conditions are properly set and are properly evaluated within the caller function. Such a coding style is error-prone and therefore not recommended. The vulnerability described in this chapter is an excellent example of the kind of problem that can arise from such code.</p><div class="figure"><a id="summary_of_the_results_so_far._an_unpriv"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e2337"/><img src="httpatomoreillycomsourcenostarchimages939253.png.jpg" alt="Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel."/></div></div><p class="title">Figure 3-3. Summary of the results so far. An unprivileged user can force a system crash by triggering a NULL pointer dereference in the Solaris kernel.</p></div><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ipif_lookup_on_name()</code></p></dd></dl></div><a id="I_programlisting3_d1e2359"/><pre class="programlisting">[..]
+19124    static ipif_t *
+19125    ipif_lookup_on_name(char *name, size_t namelen, boolean_t do_alloc,
+19126        boolean_t *exists, boolean_t isv6, zoneid_t zoneid, queue_t *q,
+19127        mblk_t *mp, ipsq_func_t func, int *error, ip_stack_t *ipst)
+19128    {
+[..]
+19138       if (error != NULL)
+<strong class="userinput"><code>19139           *error = 0;</code></strong>
+[..]
+19161       if (*cp == IPIF_SEPARATOR_CHAR) {
+19162           /*
+19163            * Reject any non-decimal aliases for logical
+19164            * interfaces. Aliases with leading zeroes
+19165            * are also rejected as they introduce ambiguity
+19166            * in the naming of the interfaces.
+19167            * In order to confirm with existing semantics,
+19168            * and to not break any programs/script relying
+19169            * on that behaviour, if&lt;0&gt;:0 is considered to be
+19170            * a valid interface.
+19171            *
+19172            * If alias has two or more digits and the first
+19173            * is zero, fail.
+19174            */
+<strong class="userinput"><code>19175           if (&amp;cp[2] &lt; endp &amp;&amp; cp[1] == '0')</code></strong>
+<strong class="userinput"><code>19176               return (NULL);</code></strong>
+19177       }
+[..]</pre><p>In line 19139, the value of <code class="literal">error</code>, which holds one of the error conditions, is explicitly set to 0. Error condition 0 means that no error has occurred so far. By supplying a colon directly followed by an ASCII zero and an arbitrary digit in the interface name, it is possible to trigger the code in line 19176, which leads to a return to the caller function. The problem is that no valid error condition is set for <code class="literal">error</code> before the function returns. So <code class="literal">ipif_lookup_on_name()</code> returns to <code class="literal">ip_extract_tunreq()</code> with <code class="literal">error</code> still set to 0.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_extract_tunreq()</code></p></dd></dl></div><a id="I_programlisting3_d1e2404"/><pre class="programlisting">[..]
+8192    ipif = ipif_lookup_on_name(ta-&gt;ifta_lifr_name,
+8193        mi_strlen(ta-&gt;ifta_lifr_name), B_FALSE, &amp;exists, isv6,
+8194        connp-&gt;conn_zoneid, CONNP_TO_WQ(connp), mp, func, <strong class="userinput"><code>&amp;error</code></strong>, ipst);
+8195    if (ipif == NULL)
+<strong class="userinput"><code>8196        return (error);</code></strong>
+[..]</pre><p>Back in <code class="literal">ip_extract_tunreq()</code>, the error condition is returned to its caller function <code class="literal">ip_process_ioctl()</code> (see line 8196).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_process_ioctl()</code></p></dd></dl></div><a id="I_programlisting3_d1e2438"/><pre class="programlisting">[..]
+26735     case TUN_CMD:
+26736         /*
+26737          * SIOC[GS]TUNPARAM appear here. ip_extract_tunreq returns
+26738          * a refheld ipif in ci.ci_ipif
+26739          */
+<strong class="userinput"><code>26740         err = ip_extract_tunreq(q, mp, &amp;ci.ci_ipif, ip_process_ioctl);</code></strong>
+<strong class="userinput"><code>26741         if (err != 0) {</code></strong>
+26742             ip_ioctl_finish(q, mp, err, IPI2MODE(ipip), NULL);
+26743             return;
+26744         }
+[..]
+<strong class="userinput"><code>26788         err = (*ipip-&gt;ipi_func)(ci.ci_ipif, ci.ci_sin, q, mp, ipip,</code></strong>
+<strong class="userinput"><code>26789             ci.ci_lifr);</code></strong>
+[..]</pre><p>Then in <code class="literal">ip_process_ioctl()</code>, the error condition is still set to 0. Thus, the <code class="literal">if</code> statement in line 26741 returns <code class="literal">FALSE</code>, and the kernel continues the execution of the rest of the function leading to the NULL pointer dereference in <code class="literal">ip_sioctl_tunparam()</code>.</p><p>What a nice bug!</p><p><a class="xref" href="ch03.html#call_graph_summarizing_the_relationships" title="Figure 3-4. Call graph summarizing the relationships of the functions involved in the NULL pointer dereference bug. The numbers shown refer to the chronological order of events.">Figure 3-4</a> shows a call graph summarizing the relationships of the functions involved in the NULL pointer dereference bug.</p><div class="figure"><a id="call_graph_summarizing_the_relationships"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e2474"/><img src="httpatomoreillycomsourcenostarchimages939255.png.jpg" alt="Call graph summarizing the relationships of the functions involved in the NULL pointer dereference bug. The numbers shown refer to the chronological order of events."/></div></div><p class="title">Figure 3-4. Call graph summarizing the relationships of the functions involved in the NULL pointer dereference bug. The numbers shown refer to the chronological order of events.</p></div></div></div></div></body></html>

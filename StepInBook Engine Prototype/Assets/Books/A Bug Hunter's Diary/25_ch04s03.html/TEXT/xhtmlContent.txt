@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>4.3 Vulnerability Remediation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="4.3 Vulnerability Remediation"><div class="titlepage"><div><div><h1 class="title"><a id="vulnerability_remediation-id2"/>4.3 Vulnerability Remediation</h1></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Tuesday, January 27, 2009</em></span></p></div><p>After I told the FFmpeg maintainers about the bug, they developed the following patch:<sup>[<a href="ch04s05.html#ftn.CHP-4-FN-6" class="footnoteref">42</a>]</sup></p><a id="I_programlisting4_d1e4733"/><pre class="programlisting">--- a/libavformat/4xm.c
++++ b/libavformat/4xm.c
+@@ −166,12 +166,13 @@ static int fourxm_read_header(AVFormatContext *s,
+                 goto fail;
+             }
+             current_track = AV_RL32(&amp;header[i + 8]);
+<strong class="userinput"><code>+            if((unsigned)current_track &gt;= UINT_MAX / sizeof(AudioTrack) - 1){</code></strong>
+<strong class="userinput"><code>+                av_log(s, AV_LOG_ERROR, "current_track too large\n");</code></strong>
+<strong class="userinput"><code>+                ret= −1;</code></strong>
+<strong class="userinput"><code>+                goto fail;</code></strong>
+<strong class="userinput"><code>+            }</code></strong>
+             if (current_track + 1 &gt; fourxm-&gt;track_count) {
+                 fourxm-&gt;track_count = current_track + 1;
+<strong class="userinput"><code>-                if((unsigned)fourxm-&gt;track_count &gt;= UINT_MAX / sizeof(AudioTrack)){</code></strong>
+<strong class="userinput"><code>-                    ret= −1;</code></strong>
+<strong class="userinput"><code>-                    goto fail;</code></strong>
+<strong class="userinput"><code>-                }</code></strong>
+                 fourxm-&gt;tracks = av_realloc(fourxm-&gt;tracks,
+                     fourxm-&gt;track_count * sizeof(AudioTrack));
+                 if (!fourxm-&gt;tracks) {</pre><p>The patch applies a new length check that restricts the maximum value for <code class="literal">current_track</code> to <code class="literal">0x09249247</code>.</p><a id="I_programlisting4_d1e4771"/><pre class="programlisting">(UINT_MAX   / sizeof(AudioTrack) - 1) - 1 = maximum allowed value for current_track
+(0xffffffff / 0x1c               - 1) - 1 = 0x09249247</pre><p>When the patch is in place, <code class="literal">current_track</code> can’t become negative, and the vulnerability is indeed fixed.<a id="IDX-CHP-4-0017" class="indexterm"/></p><p>This patch eliminated the vulnerability at the source code level. There’s also a generic exploit mitigation technique that would make it much harder to exploit the bug. To gain control of the execution flow, I had to overwrite a memory location to gain control over <code class="literal">EIP</code>. In this example, I used a GOT entry. The <span class="emphasis"><em>RELRO</em></span> mitigation technique has an operation mode called <span class="emphasis"><em>Full RELRO</em></span> that (re)maps the GOT as read-only, thus making it impossible to use the described GOT overwrite technique to gain control of the execution flow of FFmpeg. However, other exploitation techniques that are not mitigated by RELRO would still allow control over <code class="literal">EIP</code>.<a id="IDX-CHP-4-0018" class="indexterm"/><a id="IDX-CHP-4-0019" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>See Section C.2 for more information on the RELRO mitigation technique</em></span>.</p></div><p>To make use of the Full RELRO mitigation technique, the FFmpeg binary would need to be recompiled with the following additional linker options: <code class="literal">-Wl,-z,relro,-z,now</code>.</p><p>Example of recompiling FFmpeg with Full RELRO support:</p><a id="I_programlisting4_d1e4814"/><pre class="programlisting">linux$ <strong class="userinput"><code>./configure --extra-ldflags="-Wl,-z,relro,-z,now"</code></strong>
+linux$ <strong class="userinput"><code>make</code></strong></pre><p>Get GOT entry of <code class="literal">memalign()</code>:</p><a id="I_programlisting4_d1e4826"/><pre class="programlisting">linux$ <strong class="userinput"><code>objdump -R ./ffmpeg_g | grep memalign</code></strong>
+0855ffd0 R_386_JUMP_SLOT   posix_memalign</pre><p>Adjust <a class="xref" href="ch04s02.html#little_helper_program_to" title="Example 4-1. Little helper program to use brute force to find the appropriate value for current_track (addr_brute_force.c)">Example 4-1</a> and use brute force to get the value for <code class="literal">current_track</code>:</p><a id="I_programlisting4_d1e4838"/><pre class="programlisting">linux$ <strong class="userinput"><code>./addr_brute_force</code></strong>
+Value for 'current_track': 806ab330</pre><p>Make a new proof-of-concept file (<span class="emphasis"><em>poc_relro.4xm</em></span>) and test it in the debugger (see Section B.4 for a description of the following debugger commands):</p><a id="I_programlisting4_d1e4848"/><pre class="programlisting">linux$ <strong class="userinput"><code>gdb -q ./ffmpeg_g</code></strong>
+
+(gdb) <strong class="userinput"><code>set disassembly-flavor intel</code></strong>
+
+(gdb) <strong class="userinput"><code>run -i poc_relro.4xm</code></strong>
+Starting program: /home/tk/BHD/ffmpeg_relro/ffmpeg_g -i poc_relro.4xm
+FFmpeg version SVN-r16556, Copyright (c) 2000-2009 Fabrice Bellard, et al.
+  configuration: --extra-ldflags=-Wl,-z,relro,-z,now
+  libavutil     49.12. 0 / 49.12. 0
+  libavcodec    52.10. 0 / 52.10. 0
+  libavformat   52.23. 1 / 52.23. 1
+  libavdevice   52. 1. 0 / 52. 1. 0
+  built on Jan 24 2009 09:07:58, gcc: 4.3.3
+
+Program received signal SIGSEGV, Segmentation fault.
+0x0809c89d in fourxm_read_header (s=0xa836330, ap=0xbfb19674) at libavformat/4xm.c:178
+178     fourxm-&gt;tracks[current_track].adpcm = AV_RL32(&amp;header[i + 12]);</pre><p>FFmpeg crashed again while trying to parse the malformed media file. To see what exactly caused the crash, I asked the debugger to display the current register values as well as the last instruction executed by FFmpeg:</p><a id="I_programlisting4_d1e4861"/><pre class="programlisting">(gdb) <strong class="userinput"><code>info registers</code></strong>
+eax            0xbbbbbbbb    −1145324613
+ecx            0xa83f3e0     176419808
+edx            0x0           0
+ebx            0x806ab330    −2140490960
+esp            0xbfb194f0    0xbfb194f0
+ebp            0x855ffc0     0x855ffc0
+esi            0xa83f3a0     176419744
+edi            0xa83f330     176419632
+eip            0x809c89d     0x809c89d &lt;fourxm_read_header+509&gt;
+eflags         0x10206       [ PF IF RF ]
+cs             0x73          115
+ss             0x7b          123
+ds             0x7b          123
+es             0x7b          123
+fs             0x0           0
+gs             0x33          51
+
+(gdb) <strong class="userinput"><code>x/1i $eip</code></strong>
+0x809c89d &lt;fourxm_read_header+509&gt;:    mov    DWORD PTR [edx+ebp*1+0x10],eax</pre><p>I also displayed the address where FFmpeg had attempted to store the value of <code class="literal">EAX</code>:</p><a id="I_programlisting4_d1e4874"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x $edx+$ebp+0x10</code></strong>
+0x855ffd0 &lt;_GLOBAL_OFFSET_TABLE_+528&gt;:    0xb7dd4d40</pre><p>As expected, FFmpeg tried to write the value of <code class="literal">EAX</code> to the supplied address (<code class="literal">0x855ffd0</code>) of <code class="literal">memalign()</code>’s GOT entry.</p><a id="I_programlisting4_d1e4891"/><pre class="programlisting">(gdb) <strong class="userinput"><code>shell cat /proc/$(pidof ffmpeg_g)/maps</code></strong>
+08048000-0855f000 r-xp 00000000 08:01 101582     /home/tk/BHD/ffmpeg_relro/ffmpeg_g
+<strong class="userinput"><code>0855f000-08560000 r--p 00516000 08:01 101582     /home/tk/BHD/ffmpeg_relro/ffmpeg_g</code></strong>
+08560000-0856c000 rw-p 00517000 08:01 101582     /home/tk/BHD/ffmpeg_relro/ffmpeg_g
+0856c000-0888c000 rw-p 0856c000 00:00 0
+0a834000-0a855000 rw-p 0a834000 00:00 0          [heap]
+b7d60000-b7d61000 rw-p b7d60000 00:00 0
+b7d61000-b7ebd000 r-xp 00000000 08:01 148202     /lib/tls/i686/cmov/libc-2.9.so
+b7ebd000-b7ebe000 ---p 0015c000 08:01 148202     /lib/tls/i686/cmov/libc-2.9.so
+b7ebe000-b7ec0000 r--p 0015c000 08:01 148202     /lib/tls/i686/cmov/libc-2.9.so
+b7ec0000-b7ec1000 rw-p 0015e000 08:01 148202     /lib/tls/i686/cmov/libc-2.9.so
+b7ec1000-b7ec5000 rw-p b7ec1000 00:00 0
+b7ec5000-b7ec7000 r-xp 00000000 08:01 148208     /lib/tls/i686/cmov/libdl-2.9.so
+b7ec7000-b7ec8000 r--p 00001000 08:01 148208     /lib/tls/i686/cmov/libdl-2.9.so
+b7ec8000-b7ec9000 rw-p 00002000 08:01 148208     /lib/tls/i686/cmov/libdl-2.9.so
+b7ec9000-b7eed000 r-xp 00000000 08:01 148210     /lib/tls/i686/cmov/libm-2.9.so
+b7eed000-b7eee000 r--p 00023000 08:01 148210     /lib/tls/i686/cmov/libm-2.9.so
+b7eee000-b7eef000 rw-p 00024000 08:01 148210     /lib/tls/i686/cmov/libm-2.9.so
+b7efc000-b7efe000 rw-p b7efc000 00:00 0
+b7efe000-b7eff000 r-xp b7efe000 00:00 0          [vdso]
+b7eff000-b7f1b000 r-xp 00000000 08:01 130839     /lib/ld-2.9.so
+b7f1b000-b7f1c000 r--p 0001b000 08:01 130839     /lib/ld-2.9.so
+b7f1c000-b7f1d000 rw-p 0001c000 08:01 130839     /lib/ld-2.9.so
+bfb07000-bfb1c000 rw-p bffeb000 00:00 0          [stack]</pre><p>This time FFmpeg crashed with a segmentation fault while trying to overwrite the read-only GOT entry (see the <code class="literal">r--p</code> permissions of the GOT at <code class="literal">0855f000-08560000</code>). It seems that Full RELRO can indeed successfully mitigate GOT overwrites.</p></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>4.3 Vulnerability Remediation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="4.3 Vulnerability Remediation"><div class="titlepage"><div><div><h1 class="title"><a id="vulnerability_remediation-id2"/>4.3 Vulnerability Remediation</h1></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Tuesday, January 27, 2009</em></span></p></div><p>After I told the FFmpeg maintainers about the bug, they developed the following patch:<sup>[<a href="ch04s05.html#ftn.CHP-4-FN-6" class="footnoteref">42</a>]</sup></p><a id="I_programlisting4_d1e4733"/><pre class="programlisting">--- a/libavformat/4xm.c
++++ b/libavformat/4xm.c
+@@ −166,12 +166,13 @@ static int fourxm_read_header(AVFormatContext *s,
+                 goto fail;
+             }
+             current_track = AV_RL32(&amp;header[i + 8]);
+<strong class="userinput"><code>+            if((unsigned)current_track &gt;= UINT_MAX / sizeof(AudioTrack) - 1){</code></strong>
+<strong class="userinput"><code>+                av_log(s, AV_LOG_ERROR, "current_track too large\n");</code></strong>
+<strong class="userinput"><code>+                ret= −1;</code></strong>
+<strong class="userinput"><code>+                goto fail;</code></strong>
+<strong class="userinput"><code>+            }</code></strong>
+             if (current_track + 1 &gt; fourxm-&gt;track_count) {
+                 fourxm-&gt;track_count = current_track + 1;
+<strong class="userinput"><code>-                if((unsigned)fourxm-&gt;track_count &gt;= UINT_MAX / sizeof(AudioTrack)){</code></strong>
+<strong class="userinput"><code>-                    ret= −1;</code></strong>
+<strong class="userinput"><code>-                    goto fail;</code></strong>
+<strong class="userinput"><code>-                }</code></strong>
+                 fourxm-&gt;tracks = av_realloc(fourxm-&gt;tracks,
+                     fourxm-&gt;track_count * sizeof(AudioTrack));
+                 if (!fourxm-&gt;tracks) {</pre><p>The patch applies a new length check that restricts the maximum value for <code class="literal">current_track</code> to <code class="literal">0x09249247</code>.</p><a id="I_programlisting4_d1e4771"/><pre class="programlisting">(UINT_MAX   / sizeof(AudioTrack) - 1) - 1 = maximum allowed value for current_track
+(0xffffffff / 0x1c               - 1) - 1 = 0x09249247</pre><p>When the patch is in place, <code class="literal">current_track</code> can’t become negative, and the vulnerability is indeed fixed.<a id="IDX-CHP-4-0017" class="indexterm"/></p><p>This patch eliminated the vulnerability at the source code level. There’s also a generic exploit mitigation technique that would make it much harder to exploit the bug. To gain control of the execution flow, I had to overwrite a memory location to gain control over <code class="literal">EIP</code>. In this example, I used a GOT entry. The <span class="emphasis"><em>RELRO</em></span> mitigation technique has an operation mode called <span class="emphasis"><em>Full RELRO</em></span> that (re)maps the GOT as read-only, thus making it impossible to use the described GOT overwrite technique to gain control of the execution flow of FFmpeg. However, other exploitation techniques that are not mitigated by RELRO would still allow control over <code class="literal">EIP</code>.<a id="IDX-CHP-4-0018" class="indexterm"/><a id="IDX-CHP-4-0019" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>See Section C.2 for more information on the RELRO mitigation technique</em></span>.</p></div><p>To make use of the Full RELRO mitigation technique, the FFmpeg binary would need to be recompiled with the following additional linker options: <code class="literal">-Wl,-z,relro,-z,now</code>.</p><p>Example of recompiling FFmpeg with Full RELRO support:</p><a id="I_programlisting4_d1e4814"/><pre class="programlisting">linux$ <strong class="userinput"><code>./configure --extra-ldflags="-Wl,-z,relro,-z,now"</code></strong>
+linux$ <strong class="userinput"><code>make</code></strong></pre><p>Get GOT entry of <code class="literal">memalign()</code>:</p><a id="I_programlisting4_d1e4826"/><pre class="programlisting">linux$ <strong class="userinput"><code>objdump -R ./ffmpeg_g | grep memalign</code></strong>
+0855ffd0 R_386_JUMP_SLOT   posix_memalign</pre><p>Adjust <a class="xref" href="ch04s02.html#little_helper_program_to" title="Example 4-1. Little helper program to use brute force to find the appropriate value for current_track (addr_brute_force.c)">Example 4-1</a> and use brute force to get the value for <code class="literal">current_track</code>:</p><a id="I_programlisting4_d1e4838"/><pre class="programlisting">linux$ <strong class="userinput"><code>./addr_brute_force</code></strong>
+Value for 'current_track': 806ab330</pre><p>Make a new proof-of-concept file (<span class="emphasis"><em>poc_relro.4xm</em></span>) and test it in the debugger (see Section B.4 for a description of the following debugger commands):</p><a id="I_programlisting4_d1e4848"/><pre class="programlisting">linux$ <strong class="userinput"><code>gdb -q ./ffmpeg_g</code></strong>
+
+(gdb) <strong class="userinput"><code>set disassembly-flavor intel</code></strong>
+
+(gdb) <strong class="userinput"><code>run -i poc_relro.4xm</code></strong>
+Starting program: /home/tk/BHD/ffmpeg_relro/ffmpeg_g -i poc_relro.4xm
+FFmpeg version SVN-r16556, Copyright (c) 2000-2009 Fabrice Bellard, et al.
+  configuration: --extra-ldflags=-Wl,-z,relro,-z,now
+  libavutil     49.12. 0 / 49.12. 0
+  libavcodec    52.10. 0 / 52.10. 0
+  libavformat   52.23. 1 / 52.23. 1
+  libavdevice   52. 1. 0 / 52. 1. 0
+  built on Jan 24 2009 09:07:58, gcc: 4.3.3
+
+Program received signal SIGSEGV, Segmentation fault.
+0x0809c89d in fourxm_read_header (s=0xa836330, ap=0xbfb19674) at libavformat/4xm.c:178
+178     fourxm-&gt;tracks[current_track].adpcm = AV_RL32(&amp;header[i + 12]);</pre><p>FFmpeg crashed again while trying to parse the malformed media file. To see what exactly caused the crash, I asked the debugger to display the current register values as well as the last instruction executed by FFmpeg:</p><a id="I_programlisting4_d1e4861"/><pre class="programlisting">(gdb) <strong class="userinput"><code>info registers</code></strong>
+eax            0xbbbbbbbb    −1145324613
+ecx            0xa83f3e0     176419808
+edx            0x0           0
+ebx            0x806ab330    −2140490960
+esp            0xbfb194f0    0xbfb194f0
+ebp            0x855ffc0     0x855ffc0
+esi            0xa83f3a0     176419744
+edi            0xa83f330     176419632
+eip            0x809c89d     0x809c89d &lt;fourxm_read_header+509&gt;
+eflags         0x10206       [ PF IF RF ]
+cs             0x73          115
+ss             0x7b          123
+ds             0x7b          123
+es             0x7b          123
+fs             0x0           0
+gs             0x33          51
+
+(gdb) <strong class="userinput"><code>x/1i $eip</code></strong>
+0x809c89d &lt;fourxm_read_header+509&gt;:    mov    DWORD PTR [edx+ebp*1+0x10],eax</pre><p>I also displayed the address where FFmpeg had attempted to store the value of <code class="literal">EAX</code>:</p><a id="I_programlisting4_d1e4874"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x $edx+$ebp+0x10</code></strong>
+0x855ffd0 &lt;_GLOBAL_OFFSET_TABLE_+528&gt;:    0xb7dd4d40</pre><p>As expected, FFmpeg tried to write the value of <code class="literal">EAX</code> to the supplied address (<code class="literal">0x855ffd0</code>) of <code class="literal">memalign()</code>’s GOT entry.</p><a id="I_programlisting4_d1e4891"/><pre class="programlisting">(gdb) <strong class="userinput"><code>shell cat /proc/$(pidof ffmpeg_g)/maps</code></strong>
+08048000-0855f000 r-xp 00000000 08:01 101582     /home/tk/BHD/ffmpeg_relro/ffmpeg_g
+<strong class="userinput"><code>0855f000-08560000 r--p 00516000 08:01 101582     /home/tk/BHD/ffmpeg_relro/ffmpeg_g</code></strong>
+08560000-0856c000 rw-p 00517000 08:01 101582     /home/tk/BHD/ffmpeg_relro/ffmpeg_g
+0856c000-0888c000 rw-p 0856c000 00:00 0
+0a834000-0a855000 rw-p 0a834000 00:00 0          [heap]
+b7d60000-b7d61000 rw-p b7d60000 00:00 0
+b7d61000-b7ebd000 r-xp 00000000 08:01 148202     /lib/tls/i686/cmov/libc-2.9.so
+b7ebd000-b7ebe000 ---p 0015c000 08:01 148202     /lib/tls/i686/cmov/libc-2.9.so
+b7ebe000-b7ec0000 r--p 0015c000 08:01 148202     /lib/tls/i686/cmov/libc-2.9.so
+b7ec0000-b7ec1000 rw-p 0015e000 08:01 148202     /lib/tls/i686/cmov/libc-2.9.so
+b7ec1000-b7ec5000 rw-p b7ec1000 00:00 0
+b7ec5000-b7ec7000 r-xp 00000000 08:01 148208     /lib/tls/i686/cmov/libdl-2.9.so
+b7ec7000-b7ec8000 r--p 00001000 08:01 148208     /lib/tls/i686/cmov/libdl-2.9.so
+b7ec8000-b7ec9000 rw-p 00002000 08:01 148208     /lib/tls/i686/cmov/libdl-2.9.so
+b7ec9000-b7eed000 r-xp 00000000 08:01 148210     /lib/tls/i686/cmov/libm-2.9.so
+b7eed000-b7eee000 r--p 00023000 08:01 148210     /lib/tls/i686/cmov/libm-2.9.so
+b7eee000-b7eef000 rw-p 00024000 08:01 148210     /lib/tls/i686/cmov/libm-2.9.so
+b7efc000-b7efe000 rw-p b7efc000 00:00 0
+b7efe000-b7eff000 r-xp b7efe000 00:00 0          [vdso]
+b7eff000-b7f1b000 r-xp 00000000 08:01 130839     /lib/ld-2.9.so
+b7f1b000-b7f1c000 r--p 0001b000 08:01 130839     /lib/ld-2.9.so
+b7f1c000-b7f1d000 rw-p 0001c000 08:01 130839     /lib/ld-2.9.so
+bfb07000-bfb1c000 rw-p bffeb000 00:00 0          [stack]</pre><p>This time FFmpeg crashed with a segmentation fault while trying to overwrite the read-only GOT entry (see the <code class="literal">r--p</code> permissions of the GOT at <code class="literal">0855f000-08560000</code>). It seems that Full RELRO can indeed successfully mitigate GOT overwrites.</p></div></body></html>

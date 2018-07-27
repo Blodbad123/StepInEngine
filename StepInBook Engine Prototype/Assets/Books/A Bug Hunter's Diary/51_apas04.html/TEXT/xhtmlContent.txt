@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>A.4 GOT Overwrites</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="A.4 GOT Overwrites"><div class="titlepage"><div><div><h1 class="title"><a id="a.4_got_overwrites"/>A.4 GOT Overwrites</h1></div></div></div><p>Once you have found a memory corruption vulnerability, you can use a variety of techniques to gain control over the instruction pointer register of the vulnerable process. One of these techniques, called <span class="emphasis"><em>GOT overwrite</em></span>, works by manipulating an entry in the so-called <span class="emphasis"><em>Global Offset Table (GOT)</em></span> of an <span class="emphasis"><em>Executable and Linkable Format (ELF)</em></span><sup>[<a href="apas04.html#ftn.APP-A-FN-1" class="footnoteref">90</a>]</sup> object to gain control over the instruction pointer. Since this technique relies on the ELF file format, it works only on platforms supporting this format (such as Linux, Solaris, or BSD).<a id="IDX-APP-A-0059" class="indexterm"/><a id="IDX-APP-A-0060" class="indexterm"/><a id="IDX-APP-A-0061" class="indexterm"/><a id="IDX-APP-A-0062" class="indexterm"/></p><p>The GOT is located in an ELF-internal data section called <code class="literal">.got</code>. Its purpose is to redirect position-independent address calculations to an absolute location, so it stores the absolute location of function-call symbols used in dynamically linked code. When a program calls a library function for the first time, the <span class="emphasis"><em>runtime link editor</em></span> (<code class="literal">rtld</code>) locates the appropriate symbol and relocates it to the GOT. Every new call to that function passes the control directly to that location, so <code class="literal">rtld</code> isn’t called for that function anymore. <a class="xref" href="apas04.html#example_code_used_to_demonstrate_the" title="Example A-4. Example code used to demonstrate the function of the Global Offset Table (got.c)">Example A-4</a> illustrates this process.</p><div class="example"><a id="example_code_used_to_demonstrate_the"/><p class="title">Example A-4. Example code used to demonstrate the function of the Global Offset Table (<span class="emphasis"><em>got.c</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02
+03    int
+04    main (void)
+05    {
+06        int  i = 16;
+07
+08        printf ("%d\n", i);
+09        printf ("%x\n", i);
+10
+11        return 0;
+12    }</pre></div></div><p>The program in <a class="xref" href="apas04.html#example_code_used_to_demonstrate_the" title="Example A-4. Example code used to demonstrate the function of the Global Offset Table (got.c)">Example A-4</a> calls the <code class="literal">printf()</code> library function two times. I compiled the program with debugging symbols and started it in the debugger (see Section B.4 for a description of the following debugger commands):<a id="IDX-APP-A-0063" class="indexterm"/></p><a id="I_programlisting_d1e10263"/><pre class="programlisting">linux$ <strong class="userinput"><code>gcc -g -o got got.c</code></strong>
+
+linux$ <strong class="userinput"><code>gdb -q ./got</code></strong>
+
+(gdb) <strong class="userinput"><code>set disassembly-flavor intel</code></strong>
+
+(gdb) <strong class="userinput"><code>disassemble main</code></strong>
+Dump of assembler code for function main:
+0x080483c4 &lt;main+0&gt;:    push   ebp
+0x080483c5 &lt;main+1&gt;:    mov    ebp,esp
+0x080483c7 &lt;main+3&gt;:    and    esp,0xfffffff0
+0x080483ca &lt;main+6&gt;:    sub    esp,0x20
+0x080483cd &lt;main+9&gt;:    mov    DWORD PTR [esp+0x1c],0x10
+0x080483d5 &lt;main+17&gt;:   mov    eax,0x80484d0
+0x080483da &lt;main+22&gt;:   mov    edx,DWORD PTR [esp+0x1c]
+0x080483de &lt;main+26&gt;:   mov    DWORD PTR [esp+0x4],edx
+0x080483e2 &lt;main+30&gt;:   mov    DWORD PTR [esp],eax
+<strong class="userinput"><code>0x080483e5 &lt;main+33&gt;:   call   0x80482fc &lt;printf@plt&gt;</code></strong>
+0x080483ea &lt;main+38&gt;:   mov    eax,0x80484d4
+0x080483ef &lt;main+43&gt;:   mov    edx,DWORD PTR [esp+0x1c]
+0x080483f3 &lt;main+47&gt;:   mov    DWORD PTR [esp+0x4],edx
+0x080483f7 &lt;main+51&gt;:   mov    DWORD PTR [esp],eax
+<strong class="userinput"><code>0x080483fa &lt;main+54&gt;:   call   0x80482fc &lt;printf@plt&gt;</code></strong>
+0x080483ff &lt;main+59&gt;:   mov    eax,0x0
+0x08048404 &lt;main+64&gt;:   leave
+0x08048405 &lt;main+65&gt;:   ret
+End of assembler dump.</pre><p>The disassembly of the <code class="literal">main()</code> function shows the address of <code class="literal">printf()</code> in the <span class="emphasis"><em>Procedure Linkage Table (PLT)</em></span>. Much as the GOT redirects position-independent address calculations to absolute locations, the PLT redirects position-independent function calls to absolute locations.<a id="IDX-APP-A-0064" class="indexterm"/></p><a id="I_programlisting_d1e10298"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1i 0x80482fc</code></strong>
+0x80482fc &lt;printf@plt&gt;: jmp    DWORD PTR ds:<strong class="userinput"><code>0x80495d8</code></strong></pre><p>The PLT entry jumps immediately into the GOT:</p><a id="I_programlisting_d1e10307"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x 0x80495d8</code></strong>
+0x80495d8 &lt;_GLOBAL_OFFSET_TABLE_+20&gt;:   <strong class="userinput"><code>0x08048302</code></strong></pre><p>If the library function wasn’t called before, the GOT entry points back into the PLT. In the PLT, a relocation offset gets pushed onto the stack, and execution is redirected to the <code class="literal">_init()</code> function. This is where <code class="literal">rtld</code> gets called to locate the referenced <code class="literal">printf()</code> symbol.<a id="IDX-APP-A-0065" class="indexterm"/></p><a id="I_programlisting_d1e10329"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/2i 0x08048302</code></strong>
+0x8048302 &lt;printf@plt+6&gt;:       push   0x10
+0x8048307 &lt;printf@plt+11&gt;:      jmp    0x80482cc</pre><p>Now let’s see what happens if <code class="literal">printf()</code> gets called a second time. First, I defined a breakpoint just before the second call to <code class="literal">printf()</code>:</p><a id="I_programlisting_d1e10342"/><pre class="programlisting">(gdb) <strong class="userinput"><code>list 0</code></strong>
+1    #include &lt;stdio.h&gt;
+2
+3    int
+4    main (void)
+5    {
+6        int    i    = 16;
+7
+8        printf ("%d\n", i);
+<strong class="userinput"><code>9        printf ("%x\n", i);</code></strong>
+10
+
+(gdb) <strong class="userinput"><code>break 9</code></strong>
+Breakpoint 1 at 0x80483ea: file got.c, line 9.</pre><p>I then started the program:</p><a id="I_programlisting_d1e10355"/><pre class="programlisting">(gdb) <strong class="userinput"><code>run</code></strong>
+Starting program: /home/tk/BHD/got
+16
+
+Breakpoint 1, main () at got.c:9
+9        printf ("%x\n", i);</pre><p>After the breakpoint triggered, I disassembled the <code class="literal">main</code> function again to see if the same PLT address was called:</p><a id="I_programlisting_d1e10365"/><pre class="programlisting">(gdb) <strong class="userinput"><code>disassemble main</code></strong>
+Dump of assembler code for function main:
+0x080483c4 &lt;main+0&gt;:    push   ebp
+0x080483c5 &lt;main+1&gt;:    mov    ebp,esp
+0x080483c7 &lt;main+3&gt;:    and    esp,0xfffffff0
+0x080483ca &lt;main+6&gt;:    sub    esp,0x20
+0x080483cd &lt;main+9&gt;:    mov    DWORD PTR [esp+0x1c],0x10
+0x080483d5 &lt;main+17&gt;:   mov    eax,0x80484d0
+0x080483da &lt;main+22&gt;:   mov    edx,DWORD PTR [esp+0x1c]
+0x080483de &lt;main+26&gt;:   mov    DWORD PTR [esp+0x4],edx
+0x080483e2 &lt;main+30&gt;:   mov    DWORD PTR [esp],eax
+<strong class="userinput"><code>0x080483e5 &lt;main+33&gt;:   call   0x80482fc &lt;printf@plt&gt;</code></strong>
+0x080483ea &lt;main+38&gt;:   mov    eax,0x80484d4
+0x080483ef &lt;main+43&gt;:   mov    edx,DWORD PTR [esp+0x1c]
+0x080483f3 &lt;main+47&gt;:   mov    DWORD PTR [esp+0x4],edx
+0x080483f7 &lt;main+51&gt;:   mov    DWORD PTR [esp],eax
+<strong class="userinput"><code>0x080483fa &lt;main+54&gt;:   call   0x80482fc &lt;printf@plt&gt;</code></strong>
+0x080483ff &lt;main+59&gt;:   mov    eax,0x0
+0x08048404 &lt;main+64&gt;:   leave
+0x08048405 &lt;main+65&gt;:   ret
+End of assembler dump.</pre><p>The same address in the PLT was indeed called:</p><a id="I_programlisting_d1e10378"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1i 0x80482fc</code></strong>
+0x80482fc &lt;printf@plt&gt;: jmp    DWORD PTR ds:<strong class="userinput"><code>0x80495d8</code></strong></pre><p>The called PLT entry jumps immediately into the GOT again:</p><a id="I_programlisting_d1e10387"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x 0x80495d8</code></strong>
+0x80495d8 &lt;_GLOBAL_OFFSET_TABLE_+20&gt;:   <strong class="userinput"><code>0xb7ed21c0</code></strong></pre><p>But this time, the GOT entry of <code class="literal">printf()</code> has changed: It now points directly to the <code class="literal">printf()</code> library function in <code class="literal">libc</code>.</p><a id="I_programlisting_d1e10406"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/10i 0xb7ed21c0</code></strong>
+0xb7ed21c0 &lt;printf&gt;:    push   ebp
+0xb7ed21c1 &lt;printf+1&gt;:  mov    ebp,esp
+0xb7ed21c3 &lt;printf+3&gt;:  push   ebx
+0xb7ed21c4 &lt;printf+4&gt;:  call   0xb7ea1aaf
+0xb7ed21c9 &lt;printf+9&gt;:  add    ebx,0xfae2b
+0xb7ed21cf &lt;printf+15&gt;: sub    esp,0xc
+0xb7ed21d2 &lt;printf+18&gt;: lea    eax,[ebp+0xc]
+0xb7ed21d5 &lt;printf+21&gt;: mov    DWORD PTR [esp+0x8],eax
+0xb7ed21d9 &lt;printf+25&gt;: mov    eax,DWORD PTR [ebp+0x8]
+0xb7ed21dc &lt;printf+28&gt;: mov    DWORD PTR [esp+0x4],eax</pre><p>Now if we change the value of the GOT entry for <code class="literal">printf()</code>, it’s possible to control the execution flow of the program when <code class="literal">printf()</code> is called:</p><a id="I_programlisting_d1e10419"/><pre class="programlisting">(gdb) <strong class="userinput"><code>set variable *(0x80495d8)=0x41414141</code></strong>
+
+(gdb) <strong class="userinput"><code>x/1x 0x80495d8</code></strong>
+0x80495d8 &lt;_GLOBAL_OFFSET_TABLE_+20&gt;:   <strong class="userinput"><code>0x41414141</code></strong>
+
+(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.
+
+Program received signal SIGSEGV, Segmentation fault.
+<strong class="userinput"><code>0x41414141 in ?? ()</code></strong>
+
+(gdb) <strong class="userinput"><code>info registers eip</code></strong>
+eip            <strong class="userinput"><code>0x41414141</code></strong>    0x41414141</pre><p>We have achieved <code class="literal">EIP</code> control. For a real-life example of this exploitation technique, see <a class="xref" href="ch04.html" title="Chapter 4. NULL Pointer FTW">Chapter 4</a>.</p><p>To determine the GOT address of a library function, you can either use the debugger, as in the previous example, or you can use the <code class="literal">objdump</code> or <code class="literal">readelf</code> command:<a id="IDX-APP-A-0066" class="indexterm"/><a id="IDX-APP-A-0067" class="indexterm"/></p><a id="I_programlisting_d1e10464"/><pre class="programlisting">linux$ <strong class="userinput"><code>objdump -R got</code></strong>
+
+got:     file format elf32-i386
+
+DYNAMIC RELOCATION RECORDS
+OFFSET   TYPE              VALUE
+080495c0 R_386_GLOB_DAT    __gmon_start__
+080495d0 R_386_JUMP_SLOT   __gmon_start__
+080495d4 R_386_JUMP_SLOT   __libc_start_main
+<strong class="userinput"><code>080495d8 R_386_JUMP_SLOT   printf</code></strong>
+
+linux$ <strong class="userinput"><code>readelf -r got</code></strong>
+
+Relocation section '.rel.dyn' at offset 0x27c contains 1 entries:
+ Offset     Info    Type            Sym.Value  Sym. Name
+080495c0  00000106 R_386_GLOB_DAT    00000000   __gmon_start__
+
+Relocation section '.rel.plt' at offset 0x284 contains 3 entries:
+ Offset     Info    Type            Sym.Value  Sym. Name
+080495d0  00000107 R_386_JUMP_SLOT   00000000   __gmon_start__
+080495d4  00000207 R_386_JUMP_SLOT   00000000   __libc_start_main
+<strong class="userinput"><code>080495d8  00000307 R_386_JUMP_SLOT   00000000   printf</code></strong></pre><div class="sect2" title="Notes"><div class="titlepage"><div><div><h2 class="title"><a id="notes-id8"/>Notes</h2></div></div></div><p><sup>[<a id="APP-A-FN-1" href="#ftn.APP-A-FN-1" class="footnote">90</a>]</sup></p></div><div class="footnotes"><br/><hr/><div class="footnote"><p><sup>[<a id="ftn.APP-A-FN-1" href="#APP-A-FN-1" class="para">90</a>] </sup>For a description of ELF, see TIS Committee, <span class="emphasis"><em>Tool Interface Standard (TIS) Executable and Linking Format (ELF) Specification</em></span>, Version 1.2, 1995, at <a class="ulink" href="http://refspecs.freestandards.org/elf/elf.pdf">http://refspecs.freestandards.org/elf/elf.pdf</a>.</p></div></div></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>A.4 GOT Overwrites</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="A.4 GOT Overwrites"><div class="titlepage"><div><div><h1 class="title"><a id="a.4_got_overwrites"/>A.4 GOT Overwrites</h1></div></div></div><p>Once you have found a memory corruption vulnerability, you can use a variety of techniques to gain control over the instruction pointer register of the vulnerable process. One of these techniques, called <span class="emphasis"><em>GOT overwrite</em></span>, works by manipulating an entry in the so-called <span class="emphasis"><em>Global Offset Table (GOT)</em></span> of an <span class="emphasis"><em>Executable and Linkable Format (ELF)</em></span><sup>[<a href="apas04.html#ftn.APP-A-FN-1" class="footnoteref">90</a>]</sup> object to gain control over the instruction pointer. Since this technique relies on the ELF file format, it works only on platforms supporting this format (such as Linux, Solaris, or BSD).<a id="IDX-APP-A-0059" class="indexterm"/><a id="IDX-APP-A-0060" class="indexterm"/><a id="IDX-APP-A-0061" class="indexterm"/><a id="IDX-APP-A-0062" class="indexterm"/></p><p>The GOT is located in an ELF-internal data section called <code class="literal">.got</code>. Its purpose is to redirect position-independent address calculations to an absolute location, so it stores the absolute location of function-call symbols used in dynamically linked code. When a program calls a library function for the first time, the <span class="emphasis"><em>runtime link editor</em></span> (<code class="literal">rtld</code>) locates the appropriate symbol and relocates it to the GOT. Every new call to that function passes the control directly to that location, so <code class="literal">rtld</code> isn’t called for that function anymore. <a class="xref" href="apas04.html#example_code_used_to_demonstrate_the" title="Example A-4. Example code used to demonstrate the function of the Global Offset Table (got.c)">Example A-4</a> illustrates this process.</p><div class="example"><a id="example_code_used_to_demonstrate_the"/><p class="title">Example A-4. Example code used to demonstrate the function of the Global Offset Table (<span class="emphasis"><em>got.c</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02
+03    int
+04    main (void)
+05    {
+06        int  i = 16;
+07
+08        printf ("%d\n", i);
+09        printf ("%x\n", i);
+10
+11        return 0;
+12    }</pre></div></div><p>The program in <a class="xref" href="apas04.html#example_code_used_to_demonstrate_the" title="Example A-4. Example code used to demonstrate the function of the Global Offset Table (got.c)">Example A-4</a> calls the <code class="literal">printf()</code> library function two times. I compiled the program with debugging symbols and started it in the debugger (see Section B.4 for a description of the following debugger commands):<a id="IDX-APP-A-0063" class="indexterm"/></p><a id="I_programlisting_d1e10263"/><pre class="programlisting">linux$ <strong class="userinput"><code>gcc -g -o got got.c</code></strong>
+
+linux$ <strong class="userinput"><code>gdb -q ./got</code></strong>
+
+(gdb) <strong class="userinput"><code>set disassembly-flavor intel</code></strong>
+
+(gdb) <strong class="userinput"><code>disassemble main</code></strong>
+Dump of assembler code for function main:
+0x080483c4 &lt;main+0&gt;:    push   ebp
+0x080483c5 &lt;main+1&gt;:    mov    ebp,esp
+0x080483c7 &lt;main+3&gt;:    and    esp,0xfffffff0
+0x080483ca &lt;main+6&gt;:    sub    esp,0x20
+0x080483cd &lt;main+9&gt;:    mov    DWORD PTR [esp+0x1c],0x10
+0x080483d5 &lt;main+17&gt;:   mov    eax,0x80484d0
+0x080483da &lt;main+22&gt;:   mov    edx,DWORD PTR [esp+0x1c]
+0x080483de &lt;main+26&gt;:   mov    DWORD PTR [esp+0x4],edx
+0x080483e2 &lt;main+30&gt;:   mov    DWORD PTR [esp],eax
+<strong class="userinput"><code>0x080483e5 &lt;main+33&gt;:   call   0x80482fc &lt;printf@plt&gt;</code></strong>
+0x080483ea &lt;main+38&gt;:   mov    eax,0x80484d4
+0x080483ef &lt;main+43&gt;:   mov    edx,DWORD PTR [esp+0x1c]
+0x080483f3 &lt;main+47&gt;:   mov    DWORD PTR [esp+0x4],edx
+0x080483f7 &lt;main+51&gt;:   mov    DWORD PTR [esp],eax
+<strong class="userinput"><code>0x080483fa &lt;main+54&gt;:   call   0x80482fc &lt;printf@plt&gt;</code></strong>
+0x080483ff &lt;main+59&gt;:   mov    eax,0x0
+0x08048404 &lt;main+64&gt;:   leave
+0x08048405 &lt;main+65&gt;:   ret
+End of assembler dump.</pre><p>The disassembly of the <code class="literal">main()</code> function shows the address of <code class="literal">printf()</code> in the <span class="emphasis"><em>Procedure Linkage Table (PLT)</em></span>. Much as the GOT redirects position-independent address calculations to absolute locations, the PLT redirects position-independent function calls to absolute locations.<a id="IDX-APP-A-0064" class="indexterm"/></p><a id="I_programlisting_d1e10298"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1i 0x80482fc</code></strong>
+0x80482fc &lt;printf@plt&gt;: jmp    DWORD PTR ds:<strong class="userinput"><code>0x80495d8</code></strong></pre><p>The PLT entry jumps immediately into the GOT:</p><a id="I_programlisting_d1e10307"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x 0x80495d8</code></strong>
+0x80495d8 &lt;_GLOBAL_OFFSET_TABLE_+20&gt;:   <strong class="userinput"><code>0x08048302</code></strong></pre><p>If the library function wasn’t called before, the GOT entry points back into the PLT. In the PLT, a relocation offset gets pushed onto the stack, and execution is redirected to the <code class="literal">_init()</code> function. This is where <code class="literal">rtld</code> gets called to locate the referenced <code class="literal">printf()</code> symbol.<a id="IDX-APP-A-0065" class="indexterm"/></p><a id="I_programlisting_d1e10329"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/2i 0x08048302</code></strong>
+0x8048302 &lt;printf@plt+6&gt;:       push   0x10
+0x8048307 &lt;printf@plt+11&gt;:      jmp    0x80482cc</pre><p>Now let’s see what happens if <code class="literal">printf()</code> gets called a second time. First, I defined a breakpoint just before the second call to <code class="literal">printf()</code>:</p><a id="I_programlisting_d1e10342"/><pre class="programlisting">(gdb) <strong class="userinput"><code>list 0</code></strong>
+1    #include &lt;stdio.h&gt;
+2
+3    int
+4    main (void)
+5    {
+6        int    i    = 16;
+7
+8        printf ("%d\n", i);
+<strong class="userinput"><code>9        printf ("%x\n", i);</code></strong>
+10
+
+(gdb) <strong class="userinput"><code>break 9</code></strong>
+Breakpoint 1 at 0x80483ea: file got.c, line 9.</pre><p>I then started the program:</p><a id="I_programlisting_d1e10355"/><pre class="programlisting">(gdb) <strong class="userinput"><code>run</code></strong>
+Starting program: /home/tk/BHD/got
+16
+
+Breakpoint 1, main () at got.c:9
+9        printf ("%x\n", i);</pre><p>After the breakpoint triggered, I disassembled the <code class="literal">main</code> function again to see if the same PLT address was called:</p><a id="I_programlisting_d1e10365"/><pre class="programlisting">(gdb) <strong class="userinput"><code>disassemble main</code></strong>
+Dump of assembler code for function main:
+0x080483c4 &lt;main+0&gt;:    push   ebp
+0x080483c5 &lt;main+1&gt;:    mov    ebp,esp
+0x080483c7 &lt;main+3&gt;:    and    esp,0xfffffff0
+0x080483ca &lt;main+6&gt;:    sub    esp,0x20
+0x080483cd &lt;main+9&gt;:    mov    DWORD PTR [esp+0x1c],0x10
+0x080483d5 &lt;main+17&gt;:   mov    eax,0x80484d0
+0x080483da &lt;main+22&gt;:   mov    edx,DWORD PTR [esp+0x1c]
+0x080483de &lt;main+26&gt;:   mov    DWORD PTR [esp+0x4],edx
+0x080483e2 &lt;main+30&gt;:   mov    DWORD PTR [esp],eax
+<strong class="userinput"><code>0x080483e5 &lt;main+33&gt;:   call   0x80482fc &lt;printf@plt&gt;</code></strong>
+0x080483ea &lt;main+38&gt;:   mov    eax,0x80484d4
+0x080483ef &lt;main+43&gt;:   mov    edx,DWORD PTR [esp+0x1c]
+0x080483f3 &lt;main+47&gt;:   mov    DWORD PTR [esp+0x4],edx
+0x080483f7 &lt;main+51&gt;:   mov    DWORD PTR [esp],eax
+<strong class="userinput"><code>0x080483fa &lt;main+54&gt;:   call   0x80482fc &lt;printf@plt&gt;</code></strong>
+0x080483ff &lt;main+59&gt;:   mov    eax,0x0
+0x08048404 &lt;main+64&gt;:   leave
+0x08048405 &lt;main+65&gt;:   ret
+End of assembler dump.</pre><p>The same address in the PLT was indeed called:</p><a id="I_programlisting_d1e10378"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1i 0x80482fc</code></strong>
+0x80482fc &lt;printf@plt&gt;: jmp    DWORD PTR ds:<strong class="userinput"><code>0x80495d8</code></strong></pre><p>The called PLT entry jumps immediately into the GOT again:</p><a id="I_programlisting_d1e10387"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x 0x80495d8</code></strong>
+0x80495d8 &lt;_GLOBAL_OFFSET_TABLE_+20&gt;:   <strong class="userinput"><code>0xb7ed21c0</code></strong></pre><p>But this time, the GOT entry of <code class="literal">printf()</code> has changed: It now points directly to the <code class="literal">printf()</code> library function in <code class="literal">libc</code>.</p><a id="I_programlisting_d1e10406"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/10i 0xb7ed21c0</code></strong>
+0xb7ed21c0 &lt;printf&gt;:    push   ebp
+0xb7ed21c1 &lt;printf+1&gt;:  mov    ebp,esp
+0xb7ed21c3 &lt;printf+3&gt;:  push   ebx
+0xb7ed21c4 &lt;printf+4&gt;:  call   0xb7ea1aaf
+0xb7ed21c9 &lt;printf+9&gt;:  add    ebx,0xfae2b
+0xb7ed21cf &lt;printf+15&gt;: sub    esp,0xc
+0xb7ed21d2 &lt;printf+18&gt;: lea    eax,[ebp+0xc]
+0xb7ed21d5 &lt;printf+21&gt;: mov    DWORD PTR [esp+0x8],eax
+0xb7ed21d9 &lt;printf+25&gt;: mov    eax,DWORD PTR [ebp+0x8]
+0xb7ed21dc &lt;printf+28&gt;: mov    DWORD PTR [esp+0x4],eax</pre><p>Now if we change the value of the GOT entry for <code class="literal">printf()</code>, it’s possible to control the execution flow of the program when <code class="literal">printf()</code> is called:</p><a id="I_programlisting_d1e10419"/><pre class="programlisting">(gdb) <strong class="userinput"><code>set variable *(0x80495d8)=0x41414141</code></strong>
+
+(gdb) <strong class="userinput"><code>x/1x 0x80495d8</code></strong>
+0x80495d8 &lt;_GLOBAL_OFFSET_TABLE_+20&gt;:   <strong class="userinput"><code>0x41414141</code></strong>
+
+(gdb) <strong class="userinput"><code>continue</code></strong>
+Continuing.
+
+Program received signal SIGSEGV, Segmentation fault.
+<strong class="userinput"><code>0x41414141 in ?? ()</code></strong>
+
+(gdb) <strong class="userinput"><code>info registers eip</code></strong>
+eip            <strong class="userinput"><code>0x41414141</code></strong>    0x41414141</pre><p>We have achieved <code class="literal">EIP</code> control. For a real-life example of this exploitation technique, see <a class="xref" href="ch04.html" title="Chapter 4. NULL Pointer FTW">Chapter 4</a>.</p><p>To determine the GOT address of a library function, you can either use the debugger, as in the previous example, or you can use the <code class="literal">objdump</code> or <code class="literal">readelf</code> command:<a id="IDX-APP-A-0066" class="indexterm"/><a id="IDX-APP-A-0067" class="indexterm"/></p><a id="I_programlisting_d1e10464"/><pre class="programlisting">linux$ <strong class="userinput"><code>objdump -R got</code></strong>
+
+got:     file format elf32-i386
+
+DYNAMIC RELOCATION RECORDS
+OFFSET   TYPE              VALUE
+080495c0 R_386_GLOB_DAT    __gmon_start__
+080495d0 R_386_JUMP_SLOT   __gmon_start__
+080495d4 R_386_JUMP_SLOT   __libc_start_main
+<strong class="userinput"><code>080495d8 R_386_JUMP_SLOT   printf</code></strong>
+
+linux$ <strong class="userinput"><code>readelf -r got</code></strong>
+
+Relocation section '.rel.dyn' at offset 0x27c contains 1 entries:
+ Offset     Info    Type            Sym.Value  Sym. Name
+080495c0  00000106 R_386_GLOB_DAT    00000000   __gmon_start__
+
+Relocation section '.rel.plt' at offset 0x284 contains 3 entries:
+ Offset     Info    Type            Sym.Value  Sym. Name
+080495d0  00000107 R_386_JUMP_SLOT   00000000   __gmon_start__
+080495d4  00000207 R_386_JUMP_SLOT   00000000   __libc_start_main
+<strong class="userinput"><code>080495d8  00000307 R_386_JUMP_SLOT   00000000   printf</code></strong></pre><div class="sect2" title="Notes"><div class="titlepage"><div><div><h2 class="title"><a id="notes-id8"/>Notes</h2></div></div></div><p><sup>[<a id="APP-A-FN-1" href="#ftn.APP-A-FN-1" class="footnote">90</a>]</sup></p></div><div class="footnotes"><br/><hr/><div class="footnote"><p><sup>[<a id="ftn.APP-A-FN-1" href="#APP-A-FN-1" class="para">90</a>] </sup>For a description of ELF, see TIS Committee, <span class="emphasis"><em>Tool Interface Standard (TIS) Executable and Linking Format (ELF) Specification</em></span>, Version 1.2, 1995, at <a class="ulink" href="http://refspecs.freestandards.org/elf/elf.pdf">http://refspecs.freestandards.org/elf/elf.pdf</a>.</p></div></div></div></body></html>

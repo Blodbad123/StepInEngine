@@ -1,0 +1,17 @@
+ManifestFileVersion: 0
+CRC: 494563653
+Hashes:
+  AssetFileHash:
+    serializedVersion: 2
+    Hash: 57cdb9588b4b59e5a7c53ff0a32d1d71
+  TypeTreeHash:
+    serializedVersion: 2
+    Hash: 31d6cfe0d16ae931b73c59d7e0c089c0
+HashAppended: 0
+ClassTypes: []
+Assets:
+- Assets/Scenes/chapter_002.unity
+- Assets/Scenes/chapter_001.unity
+- Assets/Scenes/chapter_003.unity
+- Assets/Scenes/chapter_004.unity
+Dependencies: []

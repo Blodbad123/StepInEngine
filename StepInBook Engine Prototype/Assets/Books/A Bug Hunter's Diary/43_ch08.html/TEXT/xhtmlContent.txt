@@ -1,0 +1,308 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 8. The Ringtone Massacre</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="chapter" title="Chapter 8. The Ringtone Massacre"><div class="titlepage"><div><div><h1 class="title"><a id="the_ringtone_massacre"/>Chapter 8. The Ringtone Massacre</h1></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Saturday, March 21, 2009</em></span></p><p><span class="emphasis"><em>Dear Diary</em></span>,</p></div><p>Last week a good friend of mine loaned me his jailbroken,<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-1" class="footnoteref">82</a>]</sup> first-generation iPhone. I was very excited. Ever since Apple announced the iPhone, I had wanted to see if I could find a bug in the device, but until last week I had never had access to one.<a id="IDX-CHP-8-0001" class="indexterm"/><a id="IDX-CHP-8-0002" class="indexterm"/></p><div class="sect1" title="8.1 Vulnerability Discovery"><div class="titlepage"><div><div><h1 class="title"><a id="vulnerability_discovery-id6"/>8.1 Vulnerability Discovery</h1></div></div></div><p>I finally had an iPhone to play with, and I wanted to search for bugs. But where to start? The first thing I did was make a list of installed applications and libraries that seemed most likely to have bugs. The MobileSafari browser, the MobileMail app, and the audio libraries were at the top of the list. I decided that the audio libraries were the most promising targets since these libraries do a lot of parsing and are heavily used on the phone, so I tried my luck on them.<a id="IDX-CHP-8-0003" class="indexterm"/></p><p>I performed the following steps when searching the iPhone audio libraries for a bug:<a id="IDX-CHP-8-0004" class="indexterm"/><a id="IDX-CHP-8-0005" class="indexterm"/><a id="IDX-CHP-8-0006" class="indexterm"/><a id="IDX-CHP-8-0007" class="indexterm"/><a id="IDX-CHP-8-0008" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>I used a first-generation iPhone with firmware 2.2.1 (5H11) as platform for all the following steps</em></span>.</p></div><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Step 1: Research the iPhone’s audio capabilities.</p></li><li class="listitem"><p>Step 2: Build a simple fuzzer and fuzz the phone.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>I installed all the necessary tools—like the Bash, OpenSSH, and the GNU debugger—on the iPhone using Cydia.<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-2" class="footnoteref">83</a>]</sup></p></div><div class="sect2" title="Step 1: Research the iPhone’s Audio Capabilities"><div class="titlepage"><div><div><h2 class="title"><a id="step_1_colon_research_the_iphoneas_audio"/>Step 1: Research the iPhone’s Audio Capabilities</h2></div></div></div><p>The iPhone, with its iPod-based roots, is a powerful audio-capable device. Three frameworks available on the phone provide different levels of sound functionality: the Core Audio,<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-3" class="footnoteref">84</a>]</sup> Celestial, and Audio Toolbox<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-4" class="footnoteref">85</a>]</sup> frameworks. In addition, the iPhone runs an audio daemon called <code class="literal">mediaserverd</code>, which aggregates the sound output of all applications and governs events such as volume and ringer-switch changes.<a id="IDX-CHP-8-0009" class="indexterm"/></p></div><div class="sect2" title="Step 2: Build a Simple Fuzzer and Fuzz the Phone"><div class="titlepage"><div><div><h2 class="title"><a id="step_2_colon_build_a_simple_fuzzer_and_f"/>Step 2: Build a Simple Fuzzer and Fuzz the Phone</h2></div></div></div><p>The iPhone’s audio system with all its different frameworks seemed a bit complicated, so I decided to start by building a simple fuzzer to search for obvious bugs. The fuzzer that I built does the following:</p><div class="orderedlist"><ol class="orderedlist"><li class="listitem"><p>On a Linux host: Prepares the test cases by mutating a sample target file.</p></li><li class="listitem"><p>On a Linux host: Serves these test cases via a web server.</p></li><li class="listitem"><p>On the iPhone: Opens the test cases in MobileSafari.</p></li><li class="listitem"><p>On the iPhone: Monitors <code class="literal">mediaserverd</code> for faults.</p></li><li class="listitem"><p>On the iPhone: In the event a fault is uncovered, logs the findings.</p></li><li class="listitem"><p>Repeats these steps.</p></li></ol></div><p>I created the following simple, mutation-based file fuzzer to prepare the test cases on a Linux host:</p><div class="example"><a id="the_code_i_wrote_to_prepare_test"/><p class="title">Example 8-1. The code I wrote to prepare test cases on the Linux host (<span class="emphasis"><em>fuzz.c</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02    #include &lt;sys/types.h&gt;
+03    #include &lt;sys/mman.h&gt;
+04    #include &lt;fcntl.h&gt;
+05    #include &lt;stdlib.h&gt;
+06    #include &lt;unistd.h&gt;
+07
+08    int
+09    main (int argc, char *argv[])
+10    {
+11        int          fd          = 0;
+12        char *       p           = NULL;
+13        char *       name        = NULL;
+14        unsigned int file_size   = 0;
+15        unsigned int file_offset = 0;
+16        unsigned int file_value  = 0;
+17
+18        if (argc &lt; 2) {
+19            printf ("[-] Error: not enough arguments\n");
+20            return (1);
+21        } else {
+22            file_size   = atol (argv[1]);
+23            file_offset = atol (argv[2]);
+24            file_value  = atol (argv[3]);
+25            name        = argv[4];
+26        }
+27
+28        // open file
+29        fd = open (name, O_RDWR);
+30        if (fd &lt; 0) {
+31            perror ("open");
+32            exit (1);
+33        }
+34
+35        // mmap file
+36        p = mmap (0, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+37        if ((int) p == −1) {
+38            perror ("mmap");
+39            close (fd);
+40            exit (1);
+41        }
+42
+43        // mutate file
+44        printf ("[+] file offset: 0x%08x (value: 0x%08x)\n",
+ file_offset, file_value);
+45        fflush (stdout);
+46        p[file_offset] = file_value;
+47
+48        close (fd);
+49        munmap (p, file_size);
+50
+51        return (0);
+52    }</pre></div></div><p>The fuzzer from <a class="xref" href="ch08.html#the_code_i_wrote_to_prepare_test" title="Example 8-1. The code I wrote to prepare test cases on the Linux host (fuzz.c)">Example 8-1</a> takes four arguments: the size of the sample target file, the file offset to manipulate, a 1-byte value that gets written to the given file offset, and the name of the target file. After writing the fuzzer, I compiled it:</p><a id="I_programlisting8_d1e8861"/><pre class="programlisting">linux$ <strong class="userinput"><code>gcc -o fuzz fuzz.c</code></strong></pre><p>I then began fuzzing files of the <span class="emphasis"><em>Advanced Audio Coding</em></span><sup>[<a href="ch08s05.html#ftn.CHP-8-FN-5" class="footnoteref">86</a>]</sup> (<span class="emphasis"><em>AAC</em></span>) format, which is the default audio format used on the iPhone. I chose the standard iPhone ringtone, named <span class="emphasis"><em>Alarm.m4r</em></span>, as a sample target file:<a id="IDX-CHP-8-0010" class="indexterm"/><a id="IDX-CHP-8-0011" class="indexterm"/></p><a id="I_programlisting8_d1e8883"/><pre class="programlisting">linux$ <strong class="userinput"><code>cp Alarm.m4r testcase.m4r</code></strong></pre><p>I typed the following line into the terminal to get the size of the test-case file:</p><a id="I_programlisting8_d1e8889"/><pre class="programlisting">linux$ <strong class="userinput"><code>du -b testcase.m4r</code></strong>
+415959  testcase.m4r</pre><p>The command-line options below instruct the fuzzer to replace the byte at file offset 4 with <code class="literal">0xff</code> (decimal 255):</p><a id="I_programlisting8_d1e8900"/><pre class="programlisting">linux$ <strong class="userinput"><code>./fuzz 415959 4 255 testcase.m4r</code></strong>
+[+] file offset: 0x00000004 (value: 0x000000ff)</pre><p>I then verified the result with the help of <code class="literal">xxd</code>:<a id="IDX-CHP-8-0012" class="indexterm"/></p><a id="I_programlisting8_d1e8913"/><pre class="programlisting">linux$ <strong class="userinput"><code>xxd Alarm.m4r | head −1</code></strong>
+0000000: 0000 0020 <span class="underline">66</span>74 7970 4d34 4120 0000 0000  ... ftypM4A ....
+
+linux$ <strong class="userinput"><code>xxd testcase.m4r | head −1</code></strong>
+0000000: 0000 0020 <span class="underline">ff</span>74 7970 4d34 4120 0000 0000  ... .typM4A ....</pre><p>The output shows that file offset 4 (file offsets are counted starting with 0) was replaced with the expected value (<code class="literal">0xff</code>). Next, I created a bash script to automate the file mutation:</p><div class="example"><a id="the_bash_script_i_created_to_automate"/><p class="title">Example 8-2. The bash script I created to automate file mutation (<span class="emphasis"><em>go.sh</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #!/bin/bash
+02
+03    # file size
+04    filesize=415959
+05
+06    # file offset
+07    off=0
+08
+09    # number of files
+10    num=4
+11
+12    # fuzz value
+13    val=255
+14
+15    # name counter
+16    cnt=0
+17
+18    while [ $cnt -lt $num ]
+19    do
+20          cp ./Alarm.m4r ./file$cnt.m4a
+21          ./fuzz $filesize $off $val ./file$cnt.m4a
+22          let "off+=1"
+23          let "cnt+=1"
+24    done</pre></div></div><p>This script, which is just a wrapper for the fuzzer illustrated in <a class="xref" href="ch08.html#the_code_i_wrote_to_prepare_test" title="Example 8-1. The code I wrote to prepare test cases on the Linux host (fuzz.c)">Example 8-1</a>, automatically creates four test cases of the target file <span class="emphasis"><em>Alarm.m4r</em></span> (see line 20). Starting at file offset 0 (see line 7), the first 4 bytes of the target file (see line 10) are each replaced with a <code class="literal">0xff</code> (see line 13). When executed, the script produced the following output:</p><a id="I_programlisting8_d1e8950"/><pre class="programlisting">linux$ <strong class="userinput"><code>./go.sh</code></strong>
+[+] file offset: 0x00000000 (value: 0x000000ff)
+[+] file offset: 0x00000001 (value: 0x000000ff)
+[+] file offset: 0x00000002 (value: 0x000000ff)
+[+] file offset: 0x00000003 (value: 0x000000ff)</pre><p>I then verified the created test cases:</p><a id="I_programlisting8_d1e8957"/><pre class="programlisting">linux$ <strong class="userinput"><code>xxd file0.m4a | head −1</code></strong>
+0000000: <span class="underline">ff</span>00 0020 6674 7970 4d34 4120 0000 0000  ... ftypM4A ....
+
+linux$ <strong class="userinput"><code>xxd file1.m4a | head −1</code></strong>
+0000000: 00<span class="underline">ff</span> 0020 6674 7970 4d34 4120 0000 0000  ... ftypM4A ....
+
+linux$ <strong class="userinput"><code>xxd file2.m4a | head −1</code></strong>
+0000000: 0000 <span class="underline">ff</span>20 6674 7970 4d34 4120 0000 0000  ... ftypM4A ....
+
+linux$ <strong class="userinput"><code>xxd file3.m4a | head −1</code></strong>
+0000000: 0000 00<span class="underline">ff</span> 6674 7970 4d34 4120 0000 0000  ....ftypM4A ....</pre><p>As the output shows, the fuzzer worked as expected and modified the appropriate byte in each test-case file. One important fact I haven’t mentioned yet is that the script in <a class="xref" href="ch08.html#the_bash_script_i_created_to_automate" title="Example 8-2. The bash script I created to automate file mutation (go.sh)">Example 8-2</a> changes the file extension of the alarm ringtone from <span class="emphasis"><em>.m4r</em></span> to <span class="emphasis"><em>.m4a</em></span> (see line 20). This is necessary because MobileSafari doesn’t support the <span class="emphasis"><em>.m4r</em></span> file extension used by iPhone ringtones.</p><p>I copied the modified and unmodified alarm ringtone files into the web root directory of the Apache webserver that I had installed on the Linux host. I changed the file extension of the alarm ringtone from <span class="emphasis"><em>.m4r</em></span> to <span class="emphasis"><em>.m4a</em></span> and pointed MobileSafari to the URL of the unmodified ringtone.<a id="IDX-CHP-8-0013" class="indexterm"/></p><p>As illustrated in <a class="xref" href="ch08.html#playing_the_unmodified_alarm.m4a_with_mo" title="Figure 8-1. Playing the unmodified Alarm.m4a with MobileSafari">Figure 8-1</a>, the unmodified target file <span class="emphasis"><em>Alarm.m4a</em></span> successfully played on the phone in MobileSafari. I then pointed the browser to the URL of the first modified test-case file, named <span class="emphasis"><em>file0.m4a</em></span>.</p><p><a class="xref" href="ch08.html#playing_the_modified_test-case_file_open" title="Figure 8-2. Playing the modified test-case file (file0.m4a)">Figure 8-2</a> shows that MobileSafari opens the modified file but isn’t able to parse it correctly.</p><div class="figure"><a id="playing_the_unmodified_alarm.m4a_with_mo"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject8_d1e9028"/><img src="httpatomoreillycomsourcenostarchimages939331.png.jpg" alt="Playing the unmodified Alarm.m4a with MobileSafari"/></div></div><p class="title">Figure 8-1. Playing the unmodified <span class="emphasis"><em>Alarm.m4a</em></span> with MobileSafari</p></div><div class="figure"><a id="playing_the_modified_test-case_file_open"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject8_d1e9039"/><img src="httpatomoreillycomsourcenostarchimages939333.png.jpg" alt="Playing the modified test-case file (file0.m4a)"/></div></div><p class="title">Figure 8-2. Playing the modified test-case file (<span class="emphasis"><em>file0.m4a</em></span>)</p></div><p>So what had I achieved so far? I was able to prepare audio-file test cases via mutation, launch MobileSafari, and instruct it to load the test cases. At this point, I wanted to find a way to automatically open the test-case files in MobileSafari one by one while monitoring <code class="literal">mediaserverd</code> for faults. I created this small Bash script to do the job on the phone:</p><div class="example"><a id="code_to_automatically_open_test_cases"/><p class="title">Example 8-3. Code to automatically open test cases while monitoring <code class="literal">mediaserverd</code> for faults (<span class="emphasis"><em>audiofuzzer.sh</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #!/bin/bash
+02
+03     fuzzhost=192.168.99.103
+04
+05     echo [+] =================================
+06     echo [+] Start fuzzing
+07     echo [+]
+08     echo -n "[+] Cleanup: "
+09     killall MobileSafari
+10     killall mediaserverd
+11     sleep 5
+12     echo
+13
+14     origpid=`ps -u mobile -o pid,command | grep /usr/sbin/
+mediaserverd | cut -c 0-5`
+15     echo [+] Original PID of /usr/sbin/mediaserverd: $origpid
+16
+17     currpid=$origpid
+18     let cnt=0
+19     let i=0
+20
+21     while [ $cnt -le 1000 ];
+22     do
+23             if [ $i -eq 10 ];
+24             then
+25                     echo -n "[+] Restarting mediaserverd.. "
+26                     killall mediaserverd
+27                     sleep 4
+28                    origpid=`ps -u mobile -o pid,command | grep /usr/sbin/ →
+mediaserverd | cut -c 0-5`
+29                     currpid=$origpid
+30                     sleep 10
+31                     echo "done"
+32                     echo [+] New mediaserverd PID: $origpid
+33                     i=0
+34             fi
+35             echo
+36             echo [+] =================================
+37             echo [+] Current file: http://$fuzzhost/file$cnt.m4a
+38             openURL http://$fuzzhost/file$cnt.m4a
+39             sleep 30
+40             currpid=`ps -u mobile -o pid,command | grep /usr/sbin/
+mediaserverd | → cut -c 0-5`
+41             echo [+] Current PID of /usr/sbin/mediaserverd: $currpid
+42             if [ $currpid -ne $origpid ];
+43             then
+44                     echo [+] POTENTIAL BUG FOUND! File: file$cnt.m4a
+45                     openURL http://$fuzzhost/BUG_FOUND_file$cnt.m4a
+46                     origpid=$currpid
+47                     sleep 5
+48             fi
+49             ((cnt++))
+50             ((i++))
+51             killall MobileSafari
+52     done
+53
+54     killall MobileSafari</pre></div></div><p>The Bash script illustrated in <a class="xref" href="ch08.html#code_to_automatically_open_test_cases" title="Example 8-3. Code to automatically open test cases while monitoring mediaserverd for faults (audiofuzzer.sh)">Example 8-3</a> works this way:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Line 3 displays the IP address of the web server that hosts the test cases.</p></li><li class="listitem"><p>Lines 9 and 10 restart <code class="literal">mediaserverd</code> and kill all running MobileSafari instances in order to create a clean environment.</p></li><li class="listitem"><p>Line 14 copies the process ID of the <code class="literal">mediaserverd</code> audio daemon into the variable <code class="literal">origpid</code>.</p></li><li class="listitem"><p>Line 21 contains the main loop that is executed for each test case.</p></li><li class="listitem"><p>Lines 23–34 restart the <code class="literal">mediaserverd</code> after every 10 test cases. Fuzzing the iPhone can be tedious, since some components, including <code class="literal">mediaserverd</code>, are prone to hangs.</p></li><li class="listitem"><p>Line 38 launches the individual test cases hosted on the web server using the <code class="literal">openURL</code> tool.<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-6" class="footnoteref">87</a>]</sup></p></li><li class="listitem"><p>Line 40 copies the current process ID of the <code class="literal">mediaserverd</code> audio daemon into the variable <code class="literal">currpid</code>.<a id="IDX-CHP-8-0014" class="indexterm"/><a id="IDX-CHP-8-0015" class="indexterm"/><a id="IDX-CHP-8-0016" class="indexterm"/></p></li><li class="listitem"><p>Line 42 compares the saved process ID of <code class="literal">mediaserverd</code> (see line 14) and the current process ID of the daemon. The two process IDs differ when <code class="literal">mediaserverd</code> has encountered a fault and restarted while processing one of the test cases. This finding is logged to the phone’s terminal (see line 44). The script will also send a GET request to the web server that includes the text “<code class="literal">BUG_FOUND</code>” as well as the name of the file that crashed <code class="literal">mediaserverd</code> (see line 45).</p></li><li class="listitem"><p>Line 51 kills the current instance of MobileSafari after each test-case run.</p></li></ul></div><p>After I implemented this little script, I created 1,000 mutations of the <span class="emphasis"><em>Alarm.m4r</em></span> ringtone starting at file offset 0, copied them to the web root directory of the web server, and started the <span class="emphasis"><em>audiofuzzer.sh</em></span> script on the iPhone. From time to time the phone crashed due to memory leaks. Every time that happened, I had to reboot the phone, extract the filename of the last processed test case from the access logfile of the web server, adjust line 18 of <a class="xref" href="ch08.html#code_to_automatically_open_test_cases" title="Example 8-3. Code to automatically open test cases while monitoring mediaserverd for faults (audiofuzzer.sh)">Example 8-3</a>, and continue fuzzing. Fuzzing the iPhone can be such a pain . . . but it was worth it! In addition to the memory leaks that froze the phone, I also found a bunch of crashes due to memory corruption.<a id="IDX-CHP-8-0017" class="indexterm"/><a id="IDX-CHP-8-0018" class="indexterm"/></p></div></div></div></body></html>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 8. The Ringtone Massacre</title><link rel="stylesheet" href="core.css" type="text/css"/><meta name="generator" content="DocBook XSL Stylesheets V1.74.0"/></head><body><div class="chapter" title="Chapter 8. The Ringtone Massacre"><div class="titlepage"><div><div><h1 class="title"><a id="the_ringtone_massacre"/>Chapter 8. The Ringtone Massacre</h1></div></div></div><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>Saturday, March 21, 2009</em></span></p><p><span class="emphasis"><em>Dear Diary</em></span>,</p></div><p>Last week a good friend of mine loaned me his jailbroken,<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-1" class="footnoteref">82</a>]</sup> first-generation iPhone. I was very excited. Ever since Apple announced the iPhone, I had wanted to see if I could find a bug in the device, but until last week I had never had access to one.<a id="IDX-CHP-8-0001" class="indexterm"/><a id="IDX-CHP-8-0002" class="indexterm"/></p><div class="sect1" title="8.1 Vulnerability Discovery"><div class="titlepage"><div><div><h1 class="title"><a id="vulnerability_discovery-id6"/>8.1 Vulnerability Discovery</h1></div></div></div><p>I finally had an iPhone to play with, and I wanted to search for bugs. But where to start? The first thing I did was make a list of installed applications and libraries that seemed most likely to have bugs. The MobileSafari browser, the MobileMail app, and the audio libraries were at the top of the list. I decided that the audio libraries were the most promising targets since these libraries do a lot of parsing and are heavily used on the phone, so I tried my luck on them.<a id="IDX-CHP-8-0003" class="indexterm"/></p><p>I performed the following steps when searching the iPhone audio libraries for a bug:<a id="IDX-CHP-8-0004" class="indexterm"/><a id="IDX-CHP-8-0005" class="indexterm"/><a id="IDX-CHP-8-0006" class="indexterm"/><a id="IDX-CHP-8-0007" class="indexterm"/><a id="IDX-CHP-8-0008" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p><span class="emphasis"><em>I used a first-generation iPhone with firmware 2.2.1 (5H11) as platform for all the following steps</em></span>.</p></div><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Step 1: Research the iPhone’s audio capabilities.</p></li><li class="listitem"><p>Step 2: Build a simple fuzzer and fuzz the phone.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>I installed all the necessary tools—like the Bash, OpenSSH, and the GNU debugger—on the iPhone using Cydia.<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-2" class="footnoteref">83</a>]</sup></p></div><div class="sect2" title="Step 1: Research the iPhone’s Audio Capabilities"><div class="titlepage"><div><div><h2 class="title"><a id="step_1_colon_research_the_iphoneas_audio"/>Step 1: Research the iPhone’s Audio Capabilities</h2></div></div></div><p>The iPhone, with its iPod-based roots, is a powerful audio-capable device. Three frameworks available on the phone provide different levels of sound functionality: the Core Audio,<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-3" class="footnoteref">84</a>]</sup> Celestial, and Audio Toolbox<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-4" class="footnoteref">85</a>]</sup> frameworks. In addition, the iPhone runs an audio daemon called <code class="literal">mediaserverd</code>, which aggregates the sound output of all applications and governs events such as volume and ringer-switch changes.<a id="IDX-CHP-8-0009" class="indexterm"/></p></div><div class="sect2" title="Step 2: Build a Simple Fuzzer and Fuzz the Phone"><div class="titlepage"><div><div><h2 class="title"><a id="step_2_colon_build_a_simple_fuzzer_and_f"/>Step 2: Build a Simple Fuzzer and Fuzz the Phone</h2></div></div></div><p>The iPhone’s audio system with all its different frameworks seemed a bit complicated, so I decided to start by building a simple fuzzer to search for obvious bugs. The fuzzer that I built does the following:</p><div class="orderedlist"><ol class="orderedlist"><li class="listitem"><p>On a Linux host: Prepares the test cases by mutating a sample target file.</p></li><li class="listitem"><p>On a Linux host: Serves these test cases via a web server.</p></li><li class="listitem"><p>On the iPhone: Opens the test cases in MobileSafari.</p></li><li class="listitem"><p>On the iPhone: Monitors <code class="literal">mediaserverd</code> for faults.</p></li><li class="listitem"><p>On the iPhone: In the event a fault is uncovered, logs the findings.</p></li><li class="listitem"><p>Repeats these steps.</p></li></ol></div><p>I created the following simple, mutation-based file fuzzer to prepare the test cases on a Linux host:</p><div class="example"><a id="the_code_i_wrote_to_prepare_test"/><p class="title">Example 8-1. The code I wrote to prepare test cases on the Linux host (<span class="emphasis"><em>fuzz.c</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #include &lt;stdio.h&gt;
+02    #include &lt;sys/types.h&gt;
+03    #include &lt;sys/mman.h&gt;
+04    #include &lt;fcntl.h&gt;
+05    #include &lt;stdlib.h&gt;
+06    #include &lt;unistd.h&gt;
+07
+08    int
+09    main (int argc, char *argv[])
+10    {
+11        int          fd          = 0;
+12        char *       p           = NULL;
+13        char *       name        = NULL;
+14        unsigned int file_size   = 0;
+15        unsigned int file_offset = 0;
+16        unsigned int file_value  = 0;
+17
+18        if (argc &lt; 2) {
+19            printf ("[-] Error: not enough arguments\n");
+20            return (1);
+21        } else {
+22            file_size   = atol (argv[1]);
+23            file_offset = atol (argv[2]);
+24            file_value  = atol (argv[3]);
+25            name        = argv[4];
+26        }
+27
+28        // open file
+29        fd = open (name, O_RDWR);
+30        if (fd &lt; 0) {
+31            perror ("open");
+32            exit (1);
+33        }
+34
+35        // mmap file
+36        p = mmap (0, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+37        if ((int) p == −1) {
+38            perror ("mmap");
+39            close (fd);
+40            exit (1);
+41        }
+42
+43        // mutate file
+44        printf ("[+] file offset: 0x%08x (value: 0x%08x)\n",
+ file_offset, file_value);
+45        fflush (stdout);
+46        p[file_offset] = file_value;
+47
+48        close (fd);
+49        munmap (p, file_size);
+50
+51        return (0);
+52    }</pre></div></div><p>The fuzzer from <a class="xref" href="ch08.html#the_code_i_wrote_to_prepare_test" title="Example 8-1. The code I wrote to prepare test cases on the Linux host (fuzz.c)">Example 8-1</a> takes four arguments: the size of the sample target file, the file offset to manipulate, a 1-byte value that gets written to the given file offset, and the name of the target file. After writing the fuzzer, I compiled it:</p><a id="I_programlisting8_d1e8861"/><pre class="programlisting">linux$ <strong class="userinput"><code>gcc -o fuzz fuzz.c</code></strong></pre><p>I then began fuzzing files of the <span class="emphasis"><em>Advanced Audio Coding</em></span><sup>[<a href="ch08s05.html#ftn.CHP-8-FN-5" class="footnoteref">86</a>]</sup> (<span class="emphasis"><em>AAC</em></span>) format, which is the default audio format used on the iPhone. I chose the standard iPhone ringtone, named <span class="emphasis"><em>Alarm.m4r</em></span>, as a sample target file:<a id="IDX-CHP-8-0010" class="indexterm"/><a id="IDX-CHP-8-0011" class="indexterm"/></p><a id="I_programlisting8_d1e8883"/><pre class="programlisting">linux$ <strong class="userinput"><code>cp Alarm.m4r testcase.m4r</code></strong></pre><p>I typed the following line into the terminal to get the size of the test-case file:</p><a id="I_programlisting8_d1e8889"/><pre class="programlisting">linux$ <strong class="userinput"><code>du -b testcase.m4r</code></strong>
+415959  testcase.m4r</pre><p>The command-line options below instruct the fuzzer to replace the byte at file offset 4 with <code class="literal">0xff</code> (decimal 255):</p><a id="I_programlisting8_d1e8900"/><pre class="programlisting">linux$ <strong class="userinput"><code>./fuzz 415959 4 255 testcase.m4r</code></strong>
+[+] file offset: 0x00000004 (value: 0x000000ff)</pre><p>I then verified the result with the help of <code class="literal">xxd</code>:<a id="IDX-CHP-8-0012" class="indexterm"/></p><a id="I_programlisting8_d1e8913"/><pre class="programlisting">linux$ <strong class="userinput"><code>xxd Alarm.m4r | head −1</code></strong>
+0000000: 0000 0020 <span class="underline">66</span>74 7970 4d34 4120 0000 0000  ... ftypM4A ....
+
+linux$ <strong class="userinput"><code>xxd testcase.m4r | head −1</code></strong>
+0000000: 0000 0020 <span class="underline">ff</span>74 7970 4d34 4120 0000 0000  ... .typM4A ....</pre><p>The output shows that file offset 4 (file offsets are counted starting with 0) was replaced with the expected value (<code class="literal">0xff</code>). Next, I created a bash script to automate the file mutation:</p><div class="example"><a id="the_bash_script_i_created_to_automate"/><p class="title">Example 8-2. The bash script I created to automate file mutation (<span class="emphasis"><em>go.sh</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #!/bin/bash
+02
+03    # file size
+04    filesize=415959
+05
+06    # file offset
+07    off=0
+08
+09    # number of files
+10    num=4
+11
+12    # fuzz value
+13    val=255
+14
+15    # name counter
+16    cnt=0
+17
+18    while [ $cnt -lt $num ]
+19    do
+20          cp ./Alarm.m4r ./file$cnt.m4a
+21          ./fuzz $filesize $off $val ./file$cnt.m4a
+22          let "off+=1"
+23          let "cnt+=1"
+24    done</pre></div></div><p>This script, which is just a wrapper for the fuzzer illustrated in <a class="xref" href="ch08.html#the_code_i_wrote_to_prepare_test" title="Example 8-1. The code I wrote to prepare test cases on the Linux host (fuzz.c)">Example 8-1</a>, automatically creates four test cases of the target file <span class="emphasis"><em>Alarm.m4r</em></span> (see line 20). Starting at file offset 0 (see line 7), the first 4 bytes of the target file (see line 10) are each replaced with a <code class="literal">0xff</code> (see line 13). When executed, the script produced the following output:</p><a id="I_programlisting8_d1e8950"/><pre class="programlisting">linux$ <strong class="userinput"><code>./go.sh</code></strong>
+[+] file offset: 0x00000000 (value: 0x000000ff)
+[+] file offset: 0x00000001 (value: 0x000000ff)
+[+] file offset: 0x00000002 (value: 0x000000ff)
+[+] file offset: 0x00000003 (value: 0x000000ff)</pre><p>I then verified the created test cases:</p><a id="I_programlisting8_d1e8957"/><pre class="programlisting">linux$ <strong class="userinput"><code>xxd file0.m4a | head −1</code></strong>
+0000000: <span class="underline">ff</span>00 0020 6674 7970 4d34 4120 0000 0000  ... ftypM4A ....
+
+linux$ <strong class="userinput"><code>xxd file1.m4a | head −1</code></strong>
+0000000: 00<span class="underline">ff</span> 0020 6674 7970 4d34 4120 0000 0000  ... ftypM4A ....
+
+linux$ <strong class="userinput"><code>xxd file2.m4a | head −1</code></strong>
+0000000: 0000 <span class="underline">ff</span>20 6674 7970 4d34 4120 0000 0000  ... ftypM4A ....
+
+linux$ <strong class="userinput"><code>xxd file3.m4a | head −1</code></strong>
+0000000: 0000 00<span class="underline">ff</span> 6674 7970 4d34 4120 0000 0000  ....ftypM4A ....</pre><p>As the output shows, the fuzzer worked as expected and modified the appropriate byte in each test-case file. One important fact I haven’t mentioned yet is that the script in <a class="xref" href="ch08.html#the_bash_script_i_created_to_automate" title="Example 8-2. The bash script I created to automate file mutation (go.sh)">Example 8-2</a> changes the file extension of the alarm ringtone from <span class="emphasis"><em>.m4r</em></span> to <span class="emphasis"><em>.m4a</em></span> (see line 20). This is necessary because MobileSafari doesn’t support the <span class="emphasis"><em>.m4r</em></span> file extension used by iPhone ringtones.</p><p>I copied the modified and unmodified alarm ringtone files into the web root directory of the Apache webserver that I had installed on the Linux host. I changed the file extension of the alarm ringtone from <span class="emphasis"><em>.m4r</em></span> to <span class="emphasis"><em>.m4a</em></span> and pointed MobileSafari to the URL of the unmodified ringtone.<a id="IDX-CHP-8-0013" class="indexterm"/></p><p>As illustrated in <a class="xref" href="ch08.html#playing_the_unmodified_alarm.m4a_with_mo" title="Figure 8-1. Playing the unmodified Alarm.m4a with MobileSafari">Figure 8-1</a>, the unmodified target file <span class="emphasis"><em>Alarm.m4a</em></span> successfully played on the phone in MobileSafari. I then pointed the browser to the URL of the first modified test-case file, named <span class="emphasis"><em>file0.m4a</em></span>.</p><p><a class="xref" href="ch08.html#playing_the_modified_test-case_file_open" title="Figure 8-2. Playing the modified test-case file (file0.m4a)">Figure 8-2</a> shows that MobileSafari opens the modified file but isn’t able to parse it correctly.</p><div class="figure"><a id="playing_the_unmodified_alarm.m4a_with_mo"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject8_d1e9028"/><img src="httpatomoreillycomsourcenostarchimages939331.png.jpg" alt="Playing the unmodified Alarm.m4a with MobileSafari"/></div></div><p class="title">Figure 8-1. Playing the unmodified <span class="emphasis"><em>Alarm.m4a</em></span> with MobileSafari</p></div><div class="figure"><a id="playing_the_modified_test-case_file_open"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject8_d1e9039"/><img src="httpatomoreillycomsourcenostarchimages939333.png.jpg" alt="Playing the modified test-case file (file0.m4a)"/></div></div><p class="title">Figure 8-2. Playing the modified test-case file (<span class="emphasis"><em>file0.m4a</em></span>)</p></div><p>So what had I achieved so far? I was able to prepare audio-file test cases via mutation, launch MobileSafari, and instruct it to load the test cases. At this point, I wanted to find a way to automatically open the test-case files in MobileSafari one by one while monitoring <code class="literal">mediaserverd</code> for faults. I created this small Bash script to do the job on the phone:</p><div class="example"><a id="code_to_automatically_open_test_cases"/><p class="title">Example 8-3. Code to automatically open test cases while monitoring <code class="literal">mediaserverd</code> for faults (<span class="emphasis"><em>audiofuzzer.sh</em></span>)</p><div class="example-contents"><pre class="programlisting">01    #!/bin/bash
+02
+03     fuzzhost=192.168.99.103
+04
+05     echo [+] =================================
+06     echo [+] Start fuzzing
+07     echo [+]
+08     echo -n "[+] Cleanup: "
+09     killall MobileSafari
+10     killall mediaserverd
+11     sleep 5
+12     echo
+13
+14     origpid=`ps -u mobile -o pid,command | grep /usr/sbin/
+mediaserverd | cut -c 0-5`
+15     echo [+] Original PID of /usr/sbin/mediaserverd: $origpid
+16
+17     currpid=$origpid
+18     let cnt=0
+19     let i=0
+20
+21     while [ $cnt -le 1000 ];
+22     do
+23             if [ $i -eq 10 ];
+24             then
+25                     echo -n "[+] Restarting mediaserverd.. "
+26                     killall mediaserverd
+27                     sleep 4
+28                    origpid=`ps -u mobile -o pid,command | grep /usr/sbin/ →
+mediaserverd | cut -c 0-5`
+29                     currpid=$origpid
+30                     sleep 10
+31                     echo "done"
+32                     echo [+] New mediaserverd PID: $origpid
+33                     i=0
+34             fi
+35             echo
+36             echo [+] =================================
+37             echo [+] Current file: http://$fuzzhost/file$cnt.m4a
+38             openURL http://$fuzzhost/file$cnt.m4a
+39             sleep 30
+40             currpid=`ps -u mobile -o pid,command | grep /usr/sbin/
+mediaserverd | → cut -c 0-5`
+41             echo [+] Current PID of /usr/sbin/mediaserverd: $currpid
+42             if [ $currpid -ne $origpid ];
+43             then
+44                     echo [+] POTENTIAL BUG FOUND! File: file$cnt.m4a
+45                     openURL http://$fuzzhost/BUG_FOUND_file$cnt.m4a
+46                     origpid=$currpid
+47                     sleep 5
+48             fi
+49             ((cnt++))
+50             ((i++))
+51             killall MobileSafari
+52     done
+53
+54     killall MobileSafari</pre></div></div><p>The Bash script illustrated in <a class="xref" href="ch08.html#code_to_automatically_open_test_cases" title="Example 8-3. Code to automatically open test cases while monitoring mediaserverd for faults (audiofuzzer.sh)">Example 8-3</a> works this way:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Line 3 displays the IP address of the web server that hosts the test cases.</p></li><li class="listitem"><p>Lines 9 and 10 restart <code class="literal">mediaserverd</code> and kill all running MobileSafari instances in order to create a clean environment.</p></li><li class="listitem"><p>Line 14 copies the process ID of the <code class="literal">mediaserverd</code> audio daemon into the variable <code class="literal">origpid</code>.</p></li><li class="listitem"><p>Line 21 contains the main loop that is executed for each test case.</p></li><li class="listitem"><p>Lines 23–34 restart the <code class="literal">mediaserverd</code> after every 10 test cases. Fuzzing the iPhone can be tedious, since some components, including <code class="literal">mediaserverd</code>, are prone to hangs.</p></li><li class="listitem"><p>Line 38 launches the individual test cases hosted on the web server using the <code class="literal">openURL</code> tool.<sup>[<a href="ch08s05.html#ftn.CHP-8-FN-6" class="footnoteref">87</a>]</sup></p></li><li class="listitem"><p>Line 40 copies the current process ID of the <code class="literal">mediaserverd</code> audio daemon into the variable <code class="literal">currpid</code>.<a id="IDX-CHP-8-0014" class="indexterm"/><a id="IDX-CHP-8-0015" class="indexterm"/><a id="IDX-CHP-8-0016" class="indexterm"/></p></li><li class="listitem"><p>Line 42 compares the saved process ID of <code class="literal">mediaserverd</code> (see line 14) and the current process ID of the daemon. The two process IDs differ when <code class="literal">mediaserverd</code> has encountered a fault and restarted while processing one of the test cases. This finding is logged to the phone’s terminal (see line 44). The script will also send a GET request to the web server that includes the text “<code class="literal">BUG_FOUND</code>” as well as the name of the file that crashed <code class="literal">mediaserverd</code> (see line 45).</p></li><li class="listitem"><p>Line 51 kills the current instance of MobileSafari after each test-case run.</p></li></ul></div><p>After I implemented this little script, I created 1,000 mutations of the <span class="emphasis"><em>Alarm.m4r</em></span> ringtone starting at file offset 0, copied them to the web root directory of the web server, and started the <span class="emphasis"><em>audiofuzzer.sh</em></span> script on the iPhone. From time to time the phone crashed due to memory leaks. Every time that happened, I had to reboot the phone, extract the filename of the last processed test case from the access logfile of the web server, adjust line 18 of <a class="xref" href="ch08.html#code_to_automatically_open_test_cases" title="Example 8-3. Code to automatically open test cases while monitoring mediaserverd for faults (audiofuzzer.sh)">Example 8-3</a>, and continue fuzzing. Fuzzing the iPhone can be such a pain . . . but it was worth it! In addition to the memory leaks that froze the phone, I also found a bunch of crashes due to memory corruption.<a id="IDX-CHP-8-0017" class="indexterm"/><a id="IDX-CHP-8-0018" class="indexterm"/></p></div></div></div></body></html>

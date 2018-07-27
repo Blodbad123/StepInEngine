@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ContentModelStore">
+    <e p="C:\Users\steff\.Rider2018.1\system\resharper-host\local\Transient\ReSharperHost\v12\SolutionCaches\_Editor extentions test.772177914.00" t="ExcludeRecursive" />
+    <e p="C:\Users\steff\Documents\Unity\Editor extentions test" t="IncludeRecursive">
+      <e p="Assembly-CSharp-Editor.csproj" t="IncludeRecursive" />
+      <e p="Assembly-CSharp.csproj" t="IncludeRecursive" />
+      <e p="Assets\AssetBundleBrowser" t="Include">
+        <e p="UnityEngine.AssetBundles" t="Include">
+          <e p="Editor" t="Include">
+            <e p="AssetBundleBrowser" t="Include">
+              <e p="AssetBundleBrowserMain.cs" t="Include" />
+              <e p="AssetBundleBuildTab.cs" t="Include" />
+              <e p="AssetBundleDataSource" t="Include">
+                <e p="ABDataSource.cs" t="Include" />
+                <e p="ABDataSourceProvider.cs" t="Include" />
+                <e p="AssetDatabaseABDataSource.cs" t="Include" />
+              </e>
+              <e p="AssetBundleManageTab.cs" t="Include" />
+              <e p="AssetBundleModel" t="Include">
+                <e p="ABModel.cs" t="Include" />
+                <e p="ABModelAssetInfo.cs" t="Include" />
+                <e p="ABModelBundleInfo.cs" t="Include" />
+              </e>
+              <e p="AssetBundleTree.cs" t="Include" />
+              <e p="AssetListTree.cs" t="Include" />
+              <e p="BundleDetailList.cs" t="Include" />
+              <e p="MessageList.cs" t="Include" />
+              <e p="MessageSystem.cs" t="Include" />
+            </e>
+          </e>
+        </e>
+      </e>
+      <e p="Assets\Editor" t="Include">
+        <e p="ChapterText.cs" t="Include" />
+        <e p="ImageSelecter.cs" t="Include" />
+        <e p="LoadeFile.cs" t="Include" />
+        <e p="MetaData.cs" t="Include" />
+        <e p="Navigation.cs" t="Include" />
+        <e p="PageSelecter.cs" t="Include" />
+        <e p="WindowMain.cs" t="Include" />
+      </e>
+      <e p="Assets\Scripts" t="Include">
+        <e p="LoadSave.cs" t="Include" />
+        <e p="LoadSaveMenu.cs" t="Include" />
+        <e p="Serialize.cs" t="Include" />
+        <e p="TestImages.cs" t="Include" />
+        <e p="Translation.cs" t="Include" />
+      </e>
+      <e p="Assets\TextMesh Pro" t="Include">
+        <e p="Examples &amp; Extras" t="Include">
+          <e p="Fonts" t="Include">
+            <e p="Anton OFL.txt" t="Include" />
+            <e p="Bangers - OFL.txt" t="Include" />
+            <e p="LiberationSans - OFL.txt" t="Include" />
+            <e p="NotoSans - License.txt" t="Include" />
+            <e p="Oswald Bold - OFL.txt" t="Include" />
+          </e>
+          <e p="Scripts" t="Include">
+            <e p="Benchmark01.cs" t="Include" />
+            <e p="Benchmark01_UGUI.cs" t="Include" />
+            <e p="Benchmark02.cs" t="Include" />
+            <e p="Benchmark03.cs" t="Include" />
+            <e p="Benchmark04.cs" t="Include" />
+            <e p="CameraController.cs" t="Include" />
+            <e p="ChatController.cs" t="Include" />
+            <e p="EnvMapAnimator.cs" t="Include" />
+            <e p="ObjectSpin.cs" t="Include" />
+            <e p="ShaderPropAnimator.cs" t="Include" />
+            <e p="SimpleScript.cs" t="Include" />
+            <e p="SkewTextExample.cs" t="Include" />
+            <e p="TeleType.cs" t="Include" />
+            <e p="TextConsoleSimulator.cs" t="Include" />
+            <e p="TextMeshProFloatingText.cs" t="Include" />
+            <e p="TextMeshSpawner.cs" t="Include" />
+            <e p="TMP_DigitValidator.cs" t="Include" />
+            <e p="TMP_ExampleScript_01.cs" t="Include" />
+            <e p="TMP_FrameRateCounter.cs" t="Include" />
+            <e p="TMP_PhoneNumberValidator.cs" t="Include" />
+            <e p="TMP_TextEventCheck.cs" t="Include" />
+            <e p="TMP_TextEventHandler.cs" t="Include" />
+            <e p="TMP_TextInfoDebugTool.cs" t="Include" />
+            <e p="TMP_TextSelector_A.cs" t="Include" />
+            <e p="TMP_TextSelector_B.cs" t="Include" />
+            <e p="TMP_UiFrameRateCounter.cs" t="Include" />
+            <e p="TMPro_InstructionOverlay.cs" t="Include" />
+            <e p="VertexColorCycler.cs" t="Include" />
+            <e p="VertexJitter.cs" t="Include" />
+            <e p="VertexShakeA.cs" t="Include" />
+            <e p="VertexShakeB.cs" t="Include" />
+            <e p="VertexZoom.cs" t="Include" />
+            <e p="WarpTextExample.cs" t="Include" />
+          </e>
+        </e>
+        <e p="Resources" t="Include">
+          <e p="LineBreaking Following Characters.txt" t="Include" />
+          <e p="LineBreaking Leading Characters.txt" t="Include" />
+          <e p="Shaders" t="Include">
+            <e p="TMP_Bitmap-Mobile.shader" t="Include" />
+            <e p="TMP_Bitmap.shader" t="Include" />
+            <e p="TMP_SDF Overlay.shader" t="Include" />
+            <e p="TMP_SDF-Mobile Masking.shader" t="Include" />
+            <e p="TMP_SDF-Mobile Overlay.shader" t="Include" />
+            <e p="TMP_SDF-Mobile.shader" t="Include" />
+            <e p="TMP_SDF-Surface-Mobile.shader" t="Include" />
+            <e p="TMP_SDF-Surface.shader" t="Include" />
+            <e p="TMP_SDF.shader" t="Include" />
+            <e p="TMP_Sprite.shader" t="Include" />
+            <e p="TMPro.cginc" t="Include" />
+            <e p="TMPro_Properties.cginc" t="Include" />
+            <e p="TMPro_Surface.cginc" t="Include" />
+          </e>
+        </e>
+      </e>
+      <e p="Assets\WebService" t="Include">
+        <e p="JSON" t="Include">
+          <e p="SimpleJSON.cs" t="Include" />
+          <e p="SimpleJSONBinary.cs" t="Include" />
+          <e p="SimpleJSONUnity.cs" t="Include" />
+        </e>
+        <e p="Titel.cs" t="Include" />
+        <e p="WebService.cs" t="Include" />
+        <e p="WebService_v2.cs" t="Include" />
+      </e>
+      <e p="Editor extentions test.sln" t="IncludeFlat" />
+      <e p="Library" t="ExcludeRecursive" />
+      <e p="obj" t="ExcludeRecursive" />
+      <e p="packages" t="ExcludeRecursive" />
+      <e p="Temp" t="ExcludeRecursive">
+        <e p="bin" t="ExcludeRecursive" />
+      </e>
+    </e>
+  </component>
+</project>

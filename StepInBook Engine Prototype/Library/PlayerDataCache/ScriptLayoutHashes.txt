@@ -1,0 +1,9 @@
+OSXStandalone
+PlayerPath?
+/Volumes/Repository/PROJECTS/StepInBook_Engine_Prototype/StepInBook Engine Prototype/Assets/StreamingAssets/AssetsBundles/moby-dick
+SceneListBegin?
+Assets/Scenes/chapter_002.unity
+Assets/Scenes/chapter_001.unity
+Assets/Scenes/chapter_003.unity
+Assets/Scenes/chapter_004.unity
+SceneListEnd?
